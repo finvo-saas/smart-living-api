@@ -1,0 +1,71 @@
+from django.urls import path
+
+from admin_api.views import (
+    AdminActivityLogsView,
+    AdminAnalyticsView,
+    AdminAuditLogRollbackView,
+    AdminAuditLogsView,
+    AdminComplaintsView,
+    AdminDashboardView,
+    AdminDisputeDetailView,
+    AdminDisputesView,
+    AdminFraudReportDetailView,
+    AdminFraudReportsView,
+    AdminManagedUserDetailView,
+    AdminManagedUsersView,
+    AdminPropertyModerationDetailView,
+    AdminPropertyModerationView,
+    AdminSettingsView,
+    AdminUsersView,
+    AdminVerificationDetailView,
+    AdminVerificationsView,
+)
+
+urlpatterns = [
+    path('admin/dashboard/', AdminDashboardView.as_view(), name='admin-dashboard'),
+    path('admin/users/', AdminUsersView.as_view(), name='admin-users'),
+    path('admin/users/managed/', AdminManagedUsersView.as_view(), name='admin-managed-users'),
+    path(
+        'admin/users/managed/<uuid:pk>/',
+        AdminManagedUserDetailView.as_view(),
+        name='admin-managed-user-detail',
+    ),
+    path('admin/verifications/', AdminVerificationsView.as_view(), name='admin-verifications'),
+    path(
+        'admin/verifications/<uuid:pk>/',
+        AdminVerificationDetailView.as_view(),
+        name='admin-verification-detail',
+    ),
+    path('admin/disputes/', AdminDisputesView.as_view(), name='admin-disputes'),
+    path(
+        'admin/disputes/<uuid:pk>/',
+        AdminDisputeDetailView.as_view(),
+        name='admin-dispute-detail',
+    ),
+    path(
+        'admin/properties/moderation/',
+        AdminPropertyModerationView.as_view(),
+        name='admin-property-moderation',
+    ),
+    path(
+        'admin/properties/moderation/<uuid:pk>/',
+        AdminPropertyModerationDetailView.as_view(),
+        name='admin-property-moderation-detail',
+    ),
+    path('admin/complaints/', AdminComplaintsView.as_view(), name='admin-complaints'),
+    path('admin/fraud-reports/', AdminFraudReportsView.as_view(), name='admin-fraud-reports'),
+    path(
+        'admin/fraud-reports/<uuid:pk>/',
+        AdminFraudReportDetailView.as_view(),
+        name='admin-fraud-report-detail',
+    ),
+    path('admin/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
+    path('admin/settings/', AdminSettingsView.as_view(), name='admin-settings'),
+    path('admin/activity-logs/', AdminActivityLogsView.as_view(), name='admin-activity-logs'),
+    path('admin/audit-logs/', AdminAuditLogsView.as_view(), name='admin-audit-logs'),
+    path(
+        'admin/audit-logs/<uuid:pk>/rollback/',
+        AdminAuditLogRollbackView.as_view(),
+        name='admin-audit-log-rollback',
+    ),
+]

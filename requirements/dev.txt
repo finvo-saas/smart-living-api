@@ -1,0 +1,4 @@
+-r base.txt
+django-debug-toolbar==6.2.0
+ipython==9.10.0
+ruff==0.15.7
