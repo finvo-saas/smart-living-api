@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from accounts.models import Role, User, UserProfile
+from core.seed_catalog import EXTRA_LISTINGS
 from listings.models import ListingStatus, Property, PropertyReview, VerificationStatus
 
 
@@ -175,6 +176,8 @@ SAMPLE = [
     },
 ]
 
+SAMPLE = SAMPLE + EXTRA_LISTINGS
+
 
 class Command(BaseCommand):
     help = 'Seed sample properties and reviews for discovery'
@@ -266,33 +269,39 @@ class Command(BaseCommand):
                 created_count += 1
             self.stdout.write(f'  {prop.name} → {prop.id}')
 
-        # Sample review on first property
-        first = Property.objects.filter(name=SAMPLE[0]['name']).first()
-        if first:
+        # Reviews from several renters so discovery is not a single demo comment.
+        reviewers = [
+            ('+8801710000001', 5, 'Excellent mess with good food and friendly staff. Highly recommended for students.'),
+            ('+8801710000002', 4, 'Clean apartment, lift works, generator during load shedding. Rent is fair for Banani.'),
+            ('+8801710000004', 5, 'Safe ladies hostel. Management is strict about guests which I appreciate.'),
+            ('+8801710000007', 4, 'GEC mess is noisy at night but food is home-style and location is unbeatable.'),
+        ]
+        published = list(Property.objects.filter(published=True).order_by('name'))
+        for idx, (phone, rating, comment) in enumerate(reviewers):
             reviewer, _ = User.objects.get_or_create(
-                phone='+8801710000001',
+                phone=phone,
                 defaults={
-                    'name': 'Rahim Uddin',
+                    'name': phone,
                     'role': Role.RENTER,
                     'role_selected': True,
                     'is_phone_verified': True,
                 },
             )
             UserProfile.objects.get_or_create(user=reviewer)
+            if not published:
+                break
+            prop = published[idx % len(published)]
             PropertyReview.objects.update_or_create(
-                property=first,
+                property=prop,
                 user=reviewer,
                 defaults={
-                    'rating': 5,
-                    'comment': (
-                        'Excellent mess with good food and friendly staff. '
-                        'Highly recommended for students.'
-                    ),
-                    'stay_duration_months': 6,
+                    'rating': rating,
+                    'comment': comment,
+                    'stay_duration_months': 4 + idx,
                     'verified_stay': True,
                 },
             )
-            first.refresh_rating_cache()
+            prop.refresh_rating_cache()
 
         self.stdout.write(
             self.style.SUCCESS(

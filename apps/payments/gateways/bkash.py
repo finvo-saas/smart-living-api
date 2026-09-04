@@ -44,10 +44,8 @@ class BkashGateway(PaymentGateway):
             )
 
         gateway_txn_id = self._generate_txn_id()
-        # TODO: Real bKash API integration
-        # 1. POST {BKASH_BASE_URL}/tokenized/checkout/token/grant with app_key/app_secret
-        # 2. POST {BKASH_BASE_URL}/tokenized/checkout/create with amount, merchantInvoiceNumber
-        # 3. Return bkashURL as redirect_url from response
+        # TODO(M1): Live bKash/Nagad settlement for mess dues — intentionally deferred.
+        # Wire PaymentIntent here after merchant credentials; UI shows dues only for now.
         logger.info('bKash create_payment stub — plug real API at BKASH_BASE_URL')
         return PaymentIntent(
             gateway_txn_id=gateway_txn_id,

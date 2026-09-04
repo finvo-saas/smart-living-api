@@ -178,6 +178,10 @@ class MessListCreateView(APIView):
             owner_only = request.query_params.get('mine')
             if owner_only in ('1', 'true', 'yes'):
                 qs = qs.filter(owner=request.user)
+            else:
+                qs = qs.filter(flagged_unavailable_at__isnull=True)
+        else:
+            qs = qs.filter(flagged_unavailable_at__isnull=True)
         return Response(api_success(_serialize_messes(qs)))
 
     def post(self, request):
@@ -1153,3 +1157,47 @@ class MessExpenseReportView(APIView):
             end_date=date.fromisoformat(end) if end else None,
         )
         return Response(api_success(report))
+
+
+class MessLiveStatusView(APIView):
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def get(self, request, pk):
+        mess = _get_mess(pk)
+        from mess.services.live_status import serialize_live_status
+
+        return Response(api_success(serialize_live_status(mess)))
+
+    def patch(self, request, pk):
+        mess = _get_mess(pk)
+        _assert_mess_owner(mess, request.user)
+        from mess.services.live_status import update_live_status
+
+        return Response(api_success(update_live_status(mess, request.data or {})))
+
+
+class MessExpenseSplitView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        mess = _get_mess(pk)
+        if not _is_mess_owner(mess, request.user) and not _is_mess_student(mess, request.user):
+            if request.user.role != 'admin':
+                raise ForbiddenError('Access denied.')
+        today = timezone.now().date()
+        month = request.query_params.get('month')
+        year = request.query_params.get('year')
+        from mess.services.expenses import auto_split_expenses
+
+        return Response(
+            api_success(
+                auto_split_expenses(
+                    mess,
+                    month=int(month) if month else today.month,
+                    year=int(year) if year else today.year,
+                ),
+            ),
+        )

@@ -8,11 +8,17 @@ from bookings.views import (
     PropertyBookingListCreateView,
     PropertyBookingStatusView,
 )
+from core.views_sse import BookingUpdatesSSEView
 
 urlpatterns = [
     path('bookings/', PropertyBookingListCreateView.as_view(), name='booking-create'),
     path('bookings/mine/', MyPropertyBookingsView.as_view(), name='booking-mine'),
     path('bookings/owner/', OwnerPropertyBookingsView.as_view(), name='booking-owner'),
+    path(
+        'bookings/stream/',
+        BookingUpdatesSSEView.as_view(),
+        name='booking-stream',
+    ),
     path('bookings/<uuid:pk>/', PropertyBookingDetailView.as_view(), name='booking-detail'),
     path(
         'bookings/<uuid:pk>/status/',

@@ -1,5 +1,6 @@
 from django.urls import path
 
+from core.views_sse import MessLiveStatusSSEView
 from mess.views import (
     AllNoticesView,
     AttendanceBulkView,
@@ -16,6 +17,8 @@ from mess.views import (
     MessExpenseListCreateView,
     MessExpenseReportView,
     MessExpenseSummaryView,
+    MessExpenseSplitView,
+    MessLiveStatusView,
     MessListCreateView,
     MessNoticesView,
     MessRuleDetailView,
@@ -38,10 +41,84 @@ from mess.views import (
     WeeklyScheduleDetailView,
     WeeklyScheduleListCreateView,
 )
+from mess.views_living import (
+    HisabCloseMonthView,
+    HisabMonthView,
+    HisabReopenMonthView,
+    MealGridMarkAllView,
+    MealGridView,
+    MealOffListCreateView,
+    MealOffReviewView,
+    MemberDepositListCreateView,
+    MessEnsureListingView,
+    MessMealPricingView,
+    MessUtilitiesView,
+    PublicMealCalendarView,
+)
 
 urlpatterns = [
     path('mess/', MessListCreateView.as_view(), name='mess-list'),
     path('mess/<uuid:pk>/', MessDetailView.as_view(), name='mess-detail'),
+    path(
+        'mess/<uuid:pk>/meals/calendar/',
+        PublicMealCalendarView.as_view(),
+        name='mess-meal-calendar-public',
+    ),
+    path(
+        'mess/<uuid:pk>/meals/pricing/',
+        MessMealPricingView.as_view(),
+        name='mess-meal-pricing',
+    ),
+    path(
+        'mess/<uuid:pk>/utilities/',
+        MessUtilitiesView.as_view(),
+        name='mess-utilities',
+    ),
+    path(
+        'mess/<uuid:pk>/ensure-listing/',
+        MessEnsureListingView.as_view(),
+        name='mess-ensure-listing',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/grid/',
+        MealGridView.as_view(),
+        name='mess-hisab-grid',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/grid/mark-all/',
+        MealGridMarkAllView.as_view(),
+        name='mess-hisab-grid-mark-all',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/meal-off/',
+        MealOffListCreateView.as_view(),
+        name='mess-hisab-meal-off',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/meal-off/<uuid:request_id>/review/',
+        MealOffReviewView.as_view(),
+        name='mess-hisab-meal-off-review',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/deposits/',
+        MemberDepositListCreateView.as_view(),
+        name='mess-hisab-deposits',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/month/',
+        HisabMonthView.as_view(),
+        name='mess-hisab-month',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/month/close/',
+        HisabCloseMonthView.as_view(),
+        name='mess-hisab-month-close',
+    ),
+    path(
+        'mess/<uuid:pk>/hisab/month/reopen/',
+        HisabReopenMonthView.as_view(),
+        name='mess-hisab-month-reopen',
+    ),
     path('mess/<uuid:pk>/students/', MessStudentsView.as_view(), name='mess-students'),
     path('mess/<uuid:pk>/seats/', MessSeatsView.as_view(), name='mess-seats'),
     path(
@@ -171,5 +248,20 @@ urlpatterns = [
         'mess/<uuid:pk>/expenses/report/',
         MessExpenseReportView.as_view(),
         name='mess-expense-report',
+    ),
+    path(
+        'mess/<uuid:pk>/expenses/split/',
+        MessExpenseSplitView.as_view(),
+        name='mess-expense-split',
+    ),
+    path(
+        'mess/<uuid:pk>/live-status/',
+        MessLiveStatusView.as_view(),
+        name='mess-live-status',
+    ),
+    path(
+        'mess/<uuid:pk>/live-status/stream/',
+        MessLiveStatusSSEView.as_view(),
+        name='mess-live-status-sse',
     ),
 ]

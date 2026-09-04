@@ -76,6 +76,19 @@ def ensure_system_settings() -> SystemSettings:
             'enabled': False,
         }
         obj.save()
+    updates = []
+    if not obj.heartbeat:
+        from discovery.services.heartbeat import default_heartbeat_config
+
+        obj.heartbeat = default_heartbeat_config()
+        updates.append('heartbeat')
+    if not obj.push:
+        from messaging.services.push import default_push_config
+
+        obj.push = default_push_config()
+        updates.append('push')
+    if updates:
+        obj.save(update_fields=updates)
     return obj
 
 

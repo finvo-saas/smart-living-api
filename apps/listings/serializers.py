@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from discovery.services.freshness import freshness_dict
 from listings.models import (
     ListingStatus,
     Property,
@@ -62,7 +63,29 @@ class PropertySerializer(serializers.ModelSerializer):
     )
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
+    lastConfirmedAt = serializers.DateTimeField(
+        source='last_confirmed_at',
+        allow_null=True,
+        read_only=True,
+    )
     rent = serializers.SerializerMethodField()
+    confirmedHoursAgo = serializers.SerializerMethodField()
+    stale = serializers.SerializerMethodField()
+    openSeats = serializers.IntegerField(source='open_seats', allow_null=True, read_only=True)
+    verificationScore = serializers.SerializerMethodField()
+    livingCost = serializers.SerializerMethodField()
+    livingConditionScore = serializers.SerializerMethodField()
+    safetyScore = serializers.SerializerMethodField()
+    tourImages = serializers.JSONField(source='tour_images', required=False)
+    cctv = serializers.BooleanField(allow_null=True, required=False)
+    streetLighting = serializers.BooleanField(
+        source='street_lighting',
+        allow_null=True,
+        required=False,
+    )
+    addressVerified = serializers.BooleanField(source='address_verified', read_only=True)
+    photosVerified = serializers.BooleanField(source='photos_verified', read_only=True)
+    rentVerified = serializers.BooleanField(source='rent_verified', read_only=True)
 
     class Meta:
         model = Property
@@ -95,6 +118,9 @@ class PropertySerializer(serializers.ModelSerializer):
             'verified',
             'verificationStatus',
             'verifiedAt',
+            'addressVerified',
+            'photosVerified',
+            'rentVerified',
             'description',
             'ownerId',
             'ownerName',
@@ -109,6 +135,17 @@ class PropertySerializer(serializers.ModelSerializer):
             'updatedAt',
             'featured',
             'featuredUntil',
+            'lastConfirmedAt',
+            'confirmedHoursAgo',
+            'stale',
+            'openSeats',
+            'verificationScore',
+            'livingCost',
+            'livingConditionScore',
+            'safetyScore',
+            'tourImages',
+            'cctv',
+            'streetLighting',
         )
         read_only_fields = (
             'id',
@@ -118,10 +155,18 @@ class PropertySerializer(serializers.ModelSerializer):
             'verified',
             'verificationStatus',
             'verifiedAt',
+            'addressVerified',
+            'photosVerified',
+            'rentVerified',
             'rating',
             'reviewCount',
             'createdAt',
             'updatedAt',
+            'openSeats',
+            'verificationScore',
+            'livingCost',
+            'livingConditionScore',
+            'safetyScore',
         )
 
     def get_ownerName(self, obj):
@@ -132,6 +177,12 @@ class PropertySerializer(serializers.ModelSerializer):
 
     def get_rent(self, obj):
         return _money(obj.rent)
+
+    def get_confirmedHoursAgo(self, obj):
+        return freshness_dict(obj)['confirmedHoursAgo']
+
+    def get_stale(self, obj):
+        return freshness_dict(obj)['stale']
 
     def get_mealCost(self, obj):
         if obj.meal_cost is None:
@@ -146,6 +197,26 @@ class PropertySerializer(serializers.ModelSerializer):
             if resolved:
                 urls.append(resolved)
         return urls
+
+    def get_verificationScore(self, obj):
+        from listings.services.verification_score import verification_payload
+
+        return verification_payload(obj)
+
+    def get_livingCost(self, obj):
+        from listings.services.living_cost import living_cost_for_property
+
+        return living_cost_for_property(obj)
+
+    def get_livingConditionScore(self, obj):
+        from listings.services.living_condition import living_condition_for_property
+
+        return living_condition_for_property(obj)
+
+    def get_safetyScore(self, obj):
+        from listings.services.safety_score import safety_score_for_property
+
+        return safety_score_for_property(obj)
 
 
 class PropertyWriteSerializer(serializers.ModelSerializer):
@@ -216,6 +287,18 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
         required=False,
         default=list,
     )
+    tourImages = serializers.ListField(
+        child=serializers.URLField(),
+        source='tour_images',
+        required=False,
+        default=list,
+    )
+    cctv = serializers.BooleanField(allow_null=True, required=False)
+    streetLighting = serializers.BooleanField(
+        source='street_lighting',
+        allow_null=True,
+        required=False,
+    )
 
     class Meta:
         model = Property
@@ -237,6 +320,7 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             'images',
             'videos',
             'videoThumbnail',
+            'tourImages',
             'facilities',
             'nearbyFacilities',
             'buildingAge',
@@ -244,6 +328,8 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             'furnishing',
             'parking',
             'security',
+            'cctv',
+            'streetLighting',
             'description',
             'instantBook',
             'depositMonths',
@@ -305,13 +391,53 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             validated_data['deposit_months'] = (
                 2 if validated_data.get('type') == PropertyType.APARTMENT else 1
             )
-        return super().create(validated_data)
+        prop = super().create(validated_data)
+        from listings.services.inventory import link_listing_to_mess
+        from listings.services.poi_enrich import refresh_nearby_facilities
+
+        link_listing_to_mess(prop)
+        try:
+            from discovery.services.geocode import ensure_property_coordinates
+
+            ensure_property_coordinates(prop)
+            prop.refresh_from_db()
+        except Exception:
+            pass
+        if prop.latitude is not None and prop.longitude is not None:
+            try:
+                refresh_nearby_facilities(prop)
+            except Exception:
+                pass
+        return prop
 
     def update(self, instance, validated_data):
         images = validated_data.pop('images', None)
         if images is not None:
             validated_data['image_urls'] = images
-        return super().update(instance, validated_data)
+        tour = validated_data.pop('tour_images', serializers.empty)
+        if tour is not serializers.empty:
+            validated_data['tour_images'] = tour
+        prop = super().update(instance, validated_data)
+        address_changed = any(
+            k in validated_data for k in ('address', 'city', 'area', 'latitude', 'longitude')
+        )
+        if address_changed and (prop.latitude is None or prop.longitude is None):
+            try:
+                from discovery.services.geocode import ensure_property_coordinates
+
+                ensure_property_coordinates(prop)
+                prop.refresh_from_db()
+            except Exception:
+                pass
+        if 'latitude' in validated_data or 'longitude' in validated_data or address_changed:
+            if prop.latitude is not None and prop.longitude is not None:
+                try:
+                    from listings.services.poi_enrich import refresh_nearby_facilities
+
+                    refresh_nearby_facilities(prop)
+                except Exception:
+                    pass
+        return prop
 
 
 class PropertyReviewSerializer(serializers.ModelSerializer):
@@ -332,6 +458,16 @@ class PropertyReviewSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    ownerBehaviour = serializers.IntegerField(
+        source='owner_behaviour',
+        allow_null=True,
+        read_only=True,
+    )
+    valueForMoney = serializers.IntegerField(
+        source='value_for_money',
+        allow_null=True,
+        read_only=True,
+    )
 
     class Meta:
         model = PropertyReview
@@ -342,6 +478,11 @@ class PropertyReviewSerializer(serializers.ModelSerializer):
             'userName',
             'userAvatar',
             'rating',
+            'cleanliness',
+            'security',
+            'ownerBehaviour',
+            'location',
+            'valueForMoney',
             'comment',
             'images',
             'createdAt',
@@ -357,22 +498,46 @@ class PropertyReviewSerializer(serializers.ModelSerializer):
 
     def get_userAvatar(self, obj):
         if obj.user.profile_photo:
-            request = self.context.get('request')
-            url = obj.user.profile_photo.url
-            if request:
-                return request.build_absolute_uri(url)
-            return url
+            from core.services.media import media_storage
+
+            return media_storage.absolute_url(
+                obj.user.profile_photo.url,
+                request=self.context.get('request'),
+            )
         return None
 
 
 class ReviewCreateSerializer(serializers.Serializer):
-    rating = serializers.IntegerField(min_value=1, max_value=5)
+    rating = serializers.IntegerField(min_value=1, max_value=5, required=False)
     comment = serializers.CharField(min_length=10)
     stayDurationMonths = serializers.IntegerField(
         min_value=0,
         required=False,
         allow_null=True,
     )
+    cleanliness = serializers.IntegerField(min_value=1, max_value=5, required=False)
+    security = serializers.IntegerField(min_value=1, max_value=5, required=False)
+    ownerBehaviour = serializers.IntegerField(min_value=1, max_value=5, required=False)
+    location = serializers.IntegerField(min_value=1, max_value=5, required=False)
+    valueForMoney = serializers.IntegerField(min_value=1, max_value=5, required=False)
+
+    def validate(self, attrs):
+        categories = [
+            attrs.get('cleanliness'),
+            attrs.get('security'),
+            attrs.get('ownerBehaviour'),
+            attrs.get('location'),
+            attrs.get('valueForMoney'),
+        ]
+        filled = [v for v in categories if v is not None]
+        rating = attrs.get('rating')
+        if filled:
+            attrs['rating'] = rating or int(round(sum(filled) / len(filled)))
+        elif not rating:
+            raise serializers.ValidationError(
+                'Provide an overall rating or category ratings.',
+            )
+        return attrs
 
 
 class OwnerResponseSerializer(serializers.Serializer):

@@ -4,6 +4,7 @@ from django.db.models import Avg, Count
 from django.utils import timezone
 
 from core.models import TimestampedModel, UUIDModel
+from core.services.media import upload_to_listing_image
 
 
 class PropertyType(models.TextChoices):
@@ -113,6 +114,18 @@ class Property(UUIDModel, TimestampedModel):
         default=VerificationStatus.UNVERIFIED,
     )
     verified_at = models.DateTimeField(null=True, blank=True)
+    address_verified = models.BooleanField(
+        default=False,
+        help_text='Team confirmed the address / map pin matches the premises.',
+    )
+    photos_verified = models.BooleanField(
+        default=False,
+        help_text='Team confirmed listing photos match the actual property.',
+    )
+    rent_verified = models.BooleanField(
+        default=False,
+        help_text='Team confirmed the advertised rent against owner docs / receipts.',
+    )
     description = models.TextField()
     instant_book = models.BooleanField(default=False)
     deposit_months = models.PositiveSmallIntegerField(default=1)
@@ -127,6 +140,20 @@ class Property(UUIDModel, TimestampedModel):
     review_count = models.PositiveIntegerField(default=0)
     featured = models.BooleanField(default=False, db_index=True)
     featured_until = models.DateTimeField(null=True, blank=True)
+    last_confirmed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    flagged_unavailable_at = models.DateTimeField(null=True, blank=True)
+    open_seats = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text='Live seat count synced from mess ops when linked.',
+    )
+    tour_images = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='360° panorama image URLs for virtual tour.',
+    )
+    cctv = models.BooleanField(null=True, blank=True)
+    street_lighting = models.BooleanField(null=True, blank=True)
 
     class Meta:
         db_table = 'listings_property'
@@ -161,7 +188,11 @@ class PropertyImage(UUIDModel, TimestampedModel):
         on_delete=models.CASCADE,
         related_name='image_files',
     )
-    file = models.ImageField(upload_to='listings/', null=True, blank=True)
+    file = models.ImageField(
+        upload_to=upload_to_listing_image,
+        null=True,
+        blank=True,
+    )
     url = models.URLField(blank=True, default='')
     sort_order = models.PositiveSmallIntegerField(default=0)
     alt_text = models.CharField(max_length=255, blank=True, default='')
@@ -174,10 +205,9 @@ class PropertyImage(UUIDModel, TimestampedModel):
         if self.url:
             return self.url
         if self.file:
-            url = self.file.url
-            if request is not None:
-                return request.build_absolute_uri(url)
-            return url
+            from core.services.media import media_storage
+
+            return media_storage.absolute_url(self.file.url, request=request)
         return ''
 
 
@@ -193,6 +223,11 @@ class PropertyReview(UUIDModel, TimestampedModel):
         related_name='property_reviews',
     )
     rating = models.PositiveSmallIntegerField()
+    cleanliness = models.PositiveSmallIntegerField(null=True, blank=True)
+    security = models.PositiveSmallIntegerField(null=True, blank=True)
+    owner_behaviour = models.PositiveSmallIntegerField(null=True, blank=True)
+    location = models.PositiveSmallIntegerField(null=True, blank=True)
+    value_for_money = models.PositiveSmallIntegerField(null=True, blank=True)
     comment = models.TextField()
     images = models.JSONField(default=list, blank=True)
     stay_duration_months = models.PositiveSmallIntegerField(null=True, blank=True)

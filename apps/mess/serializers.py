@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from discovery.services.freshness import freshness_dict
 from mess.models import (
     AttendanceRecord,
     DailyMenu,
@@ -50,6 +51,19 @@ class MessSerializer(serializers.ModelSerializer):
     ownerName = serializers.CharField(source='owner_name', read_only=True)
     ownerPhone = serializers.CharField(source='owner_phone', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    listingId = serializers.UUIDField(source='listing_id', read_only=True, allow_null=True)
+    featured = serializers.BooleanField(read_only=True)
+    lastConfirmedAt = serializers.DateTimeField(
+        source='last_confirmed_at',
+        allow_null=True,
+        read_only=True,
+    )
+    confirmedHoursAgo = serializers.SerializerMethodField()
+    stale = serializers.SerializerMethodField()
+    liveStatus = serializers.SerializerMethodField()
+    mealSystem = serializers.SerializerMethodField()
+    utilities = serializers.SerializerMethodField()
+    bookUrl = serializers.SerializerMethodField()
 
     class Meta:
         model = Mess
@@ -68,7 +82,42 @@ class MessSerializer(serializers.ModelSerializer):
             'ownerName',
             'ownerPhone',
             'createdAt',
+            'listingId',
+            'featured',
+            'lastConfirmedAt',
+            'confirmedHoursAgo',
+            'stale',
+            'liveStatus',
+            'mealSystem',
+            'utilities',
+            'bookUrl',
         )
+
+    def get_confirmedHoursAgo(self, obj):
+        return freshness_dict(obj)['confirmedHoursAgo']
+
+    def get_stale(self, obj):
+        return freshness_dict(obj)['stale']
+
+    def get_liveStatus(self, obj):
+        from mess.services.live_status import serialize_live_status
+
+        return serialize_live_status(obj)
+
+    def get_mealSystem(self, obj):
+        from mess.services.meal_public import meal_system_summary
+
+        return meal_system_summary(obj)
+
+    def get_utilities(self, obj):
+        from mess.services.reliability import reliability_bundle
+
+        return reliability_bundle(obj)
+
+    def get_bookUrl(self, obj):
+        if obj.listing_id:
+            return f'/listings/{obj.listing_id}'
+        return None
 
 
 class MessCreateSerializer(serializers.Serializer):
@@ -81,10 +130,16 @@ class MessCreateSerializer(serializers.Serializer):
     images = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     description = serializers.CharField(required=False, allow_blank=True, default='')
     totalSeats = serializers.IntegerField(source='total_seats', required=False, default=0)
+    listingId = serializers.UUIDField(required=False, allow_null=True)
 
     def create_mess(self, owner):
-        data = self.validated_data
-        return Mess.objects.create(owner=owner, **data)
+        data = dict(self.validated_data)
+        listing_id = data.pop('listingId', None)
+        mess = Mess.objects.create(owner=owner, **data)
+        from listings.services.inventory import attach_listing_to_mess
+
+        attach_listing_to_mess(mess, listing_id)
+        return mess
 
 
 class StudentSerializer(serializers.ModelSerializer):

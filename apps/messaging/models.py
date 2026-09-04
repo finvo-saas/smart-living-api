@@ -22,6 +22,8 @@ class NotificationType(models.TextChoices):
     COMPLAINT = 'complaint', 'Complaint'
     BILL = 'bill', 'Bill'
     SYSTEM = 'system', 'System'
+    HEARTBEAT = 'heartbeat', 'Heartbeat'
+    PUSH = 'push', 'Push'
     OTHER = 'other', 'Other'
 
 
@@ -118,3 +120,26 @@ class Notification(UUIDModel, TimestampedModel):
     class Meta:
         db_table = 'messaging_notification'
         ordering = ('-created_at',)
+
+
+class PushSubscription(UUIDModel, TimestampedModel):
+    """Browser Web Push subscription (VAPID)."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='push_subscriptions',
+    )
+    endpoint = models.TextField(unique=True)
+    p256dh = models.CharField(max_length=200)
+    auth = models.CharField(max_length=200)
+    user_agent = models.CharField(max_length=300, blank=True, default='')
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    fail_count = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = 'messaging_push_subscription'
+        ordering = ('-updated_at',)
+
+    def __str__(self):
+        return f'{self.user_id}:{self.endpoint[-24:]}'

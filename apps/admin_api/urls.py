@@ -15,6 +15,9 @@ from admin_api.views import (
     AdminManagedUsersView,
     AdminPropertyModerationDetailView,
     AdminPropertyModerationView,
+    AdminHeartbeatPingsView,
+    AdminHeartbeatView,
+    AdminPushView,
     AdminSettingsView,
     AdminUsersView,
     AdminVerificationDetailView,
@@ -61,6 +64,13 @@ urlpatterns = [
     ),
     path('admin/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
     path('admin/settings/', AdminSettingsView.as_view(), name='admin-settings'),
+    path('admin/heartbeat/', AdminHeartbeatView.as_view(), name='admin-heartbeat'),
+    path(
+        'admin/heartbeat/pings/',
+        AdminHeartbeatPingsView.as_view(),
+        name='admin-heartbeat-pings',
+    ),
+    path('admin/push/', AdminPushView.as_view(), name='admin-push'),
     path('admin/activity-logs/', AdminActivityLogsView.as_view(), name='admin-activity-logs'),
     path('admin/audit-logs/', AdminAuditLogsView.as_view(), name='admin-audit-logs'),
     path(

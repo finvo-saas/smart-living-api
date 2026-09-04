@@ -59,6 +59,70 @@ def monthly_expense_summary(mess: Mess, month: int, year: int) -> dict:
     }
 
 
+def auto_split_expenses(mess: Mess, month: int | None = None, year: int | None = None) -> dict:
+    """Split utility-style expenses equally across active mess students."""
+    today = timezone.now().date()
+    month = month or today.month
+    year = year or today.year
+    summary = monthly_expense_summary(mess, month, year)
+
+    from mess.models import MessStudent
+
+    students = list(
+        MessStudent.objects.filter(mess=mess, is_active=True, is_deleted=False)
+        .order_by('name')
+    )
+    headcount = max(len(students), 1)
+
+    # Prefer utilities-like categories for shared bills; fall back to all.
+    util_keys = {'utilities', 'food', 'supplies'}
+    util_total = sum(
+        row['amount']
+        for row in summary['categoryBreakdown']
+        if row['category'] in util_keys
+    )
+    split_total = util_total if util_total > 0 else float(summary['totalAmount'] or 0)
+    per_person = round(split_total / headcount, 2)
+
+    shares = []
+    for student in students:
+        shares.append({
+            'studentId': str(student.id),
+            'name': student.name,
+            'seatNumber': student.seat_number or '',
+            'share': per_person,
+        })
+    if not shares:
+        shares.append({
+            'studentId': None,
+            'name': 'Unassigned seat pool',
+            'seatNumber': '',
+            'share': per_person,
+        })
+
+    by_category = []
+    for row in summary['categoryBreakdown']:
+        if row['amount'] <= 0:
+            continue
+        by_category.append({
+            'category': row['category'],
+            'total': row['amount'],
+            'perPerson': round(row['amount'] / headcount, 2),
+        })
+
+    return {
+        'messId': str(mess.id),
+        'month': summary['month'],
+        'year': year,
+        'activeStudents': len(students),
+        'splitTotal': split_total,
+        'perPerson': per_person,
+        'shares': shares,
+        'byCategory': by_category,
+        'note': 'Equal split across active students for the selected month.',
+    }
+
+
 def generate_expense_report(
     mess: Mess,
     user,

@@ -5,6 +5,8 @@ from django.utils import timezone
 
 from accounts.managers import UserManager
 from core.models import TimestampedModel, UUIDModel
+from core.services.media import upload_to_profile, upload_to_verification
+from core.storage import private_media_storage
 
 
 class Role(models.TextChoices):
@@ -25,11 +27,28 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     is_phone_verified = models.BooleanField(default=False)
-    profile_photo = models.ImageField(upload_to='profiles/', null=True, blank=True)
+    profile_photo = models.ImageField(
+        upload_to=upload_to_profile,
+        null=True,
+        blank=True,
+    )
     locale = models.CharField(max_length=5, default='en')
     role_selected = models.BooleanField(
         default=False,
         help_text='False until user completes role selection after first OTP login.',
+    )
+    pin_set_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Set when the user stores a 4–6 digit PIN (Django password hash).',
+    )
+    heartbeat_sms_opt_in = models.BooleanField(
+        default=True,
+        help_text='Owners receive weekly vacancy-confirm SMS when enabled by admin.',
+    )
+    push_opt_in = models.BooleanField(
+        default=True,
+        help_text='Browser/web-app push notifications when the user has subscribed.',
     )
 
     objects = UserManager()
@@ -49,6 +68,10 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
     def admin_role(self):
         profile = getattr(self, 'admin_profile', None)
         return profile.admin_role if profile else None
+
+    @property
+    def has_pin(self) -> bool:
+        return self.pin_set_at is not None
 
 
 class OTPChallenge(UUIDModel, TimestampedModel):
@@ -99,12 +122,115 @@ class UserProfile(UUIDModel, TimestampedModel):
     family_members = models.JSONField(default=list, blank=True)
     emergency_contacts = models.JSONField(default=list, blank=True)
     documents = models.JSONField(default=list, blank=True)
+    # CIMS compliance (DMP Dhaka Metropolitan Police)
+    cims_registered = models.BooleanField(
+        default=False,
+        help_text='Whether user has registered with CIMS (DMP).',
+    )
+    cims_registration_number = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='CIMS registration reference number.',
+    )
+    cims_police_station = models.CharField(
+        max_length=120,
+        blank=True,
+        default='',
+        help_text='Thana / police station for CIMS registration.',
+    )
+    cims_registered_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Date when CIMS registration was completed.',
+    )
+    cims_reminder_dismissed = models.BooleanField(
+        default=False,
+        help_text='User dismissed the CIMS registration reminder.',
+    )
 
     class Meta:
         db_table = 'accounts_user_profile'
 
     def __str__(self):
         return f'Profile<{self.user.phone}>'
+
+
+class RoommateProfile(UUIDModel, TimestampedModel):
+    """Lifestyle questionnaire used for AI roommate matching."""
+
+    class Occupation(models.TextChoices):
+        STUDENT = 'student', 'Student'
+        JOB = 'job', 'Job'
+        OTHER = 'other', 'Other'
+
+    class SleepSchedule(models.TextChoices):
+        EARLY = 'early', 'Early bird'
+        NORMAL = 'normal', 'Normal'
+        LATE = 'late', 'Night owl'
+
+    class Social(models.TextChoices):
+        QUIET = 'quiet', 'Quiet'
+        BALANCED = 'balanced', 'Balanced'
+        CHATTY = 'chatty', 'Social'
+
+    class Gender(models.TextChoices):
+        MALE = 'male', 'Male'
+        FEMALE = 'female', 'Female'
+        OTHER = 'other', 'Other'
+
+    class GenderPref(models.TextChoices):
+        MALE = 'male', 'Male'
+        FEMALE = 'female', 'Female'
+        ANY = 'any', 'Any'
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='roommate_profile',
+    )
+    looking = models.BooleanField(default=True, db_index=True)
+    occupation = models.CharField(
+        max_length=20,
+        choices=Occupation.choices,
+        default=Occupation.STUDENT,
+    )
+    sleep_schedule = models.CharField(
+        max_length=20,
+        choices=SleepSchedule.choices,
+        default=SleepSchedule.NORMAL,
+    )
+    smoking = models.BooleanField(default=False)
+    cooking = models.BooleanField(default=True)
+    cleanliness = models.PositiveSmallIntegerField(default=3)
+    social = models.CharField(
+        max_length=20,
+        choices=Social.choices,
+        default=Social.BALANCED,
+    )
+    pets_ok = models.BooleanField(default=False)
+    gender = models.CharField(
+        max_length=20,
+        choices=Gender.choices,
+        blank=True,
+        default='',
+    )
+    gender_pref = models.CharField(
+        max_length=20,
+        choices=GenderPref.choices,
+        default=GenderPref.ANY,
+    )
+    city = models.CharField(max_length=80, blank=True, default='', db_index=True)
+    area = models.CharField(max_length=120, blank=True, default='')
+    budget_min = models.PositiveIntegerField(default=0)
+    budget_max = models.PositiveIntegerField(default=0)
+    bio = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'accounts_roommate_profile'
+
+    def __str__(self):
+        return f'Roommate<{self.user.phone}>'
 
 
 class AdminProfile(UUIDModel, TimestampedModel):
@@ -133,6 +259,7 @@ class VerificationDocument(UUIDModel, TimestampedModel):
         NID = 'nid', 'NID'
         PHONE = 'phone', 'Phone'
         DOCUMENT = 'document', 'Document'
+        POLICE = 'police', 'Police verification'
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
@@ -149,7 +276,12 @@ class VerificationDocument(UUIDModel, TimestampedModel):
         choices=VerificationType.choices,
     )
     document_number = models.CharField(max_length=64, blank=True, default='')
-    file = models.FileField(upload_to='verification/', null=True, blank=True)
+    file = models.FileField(
+        upload_to=upload_to_verification,
+        storage=private_media_storage,
+        null=True,
+        blank=True,
+    )
     file_name = models.CharField(max_length=255, blank=True, default='')
     status = models.CharField(
         max_length=20,
@@ -172,3 +304,31 @@ class VerificationDocument(UUIDModel, TimestampedModel):
 
     def __str__(self):
         return f'{self.verification_type}:{self.user.phone}:{self.status}'
+
+
+class TrustedDevice(UUIDModel, TimestampedModel):
+    """Browser remembered after OTP or PIN login (httpOnly device cookie)."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='trusted_devices',
+    )
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    expires_at = models.DateTimeField()
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    user_agent = models.CharField(max_length=256, blank=True, default='')
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'accounts_trusted_device'
+        ordering = ('-last_used_at', '-created_at')
+
+    def __str__(self):
+        return f'Device<{self.user.phone}>'
+
+    @property
+    def is_active(self) -> bool:
+        if self.revoked_at is not None:
+            return False
+        return timezone.now() < self.expires_at

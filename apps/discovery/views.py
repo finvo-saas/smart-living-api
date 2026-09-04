@@ -2,12 +2,12 @@ from datetime import timedelta
 
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.envelope import api_success
-from core.exceptions import NotFoundError
+from core.exceptions import ForbiddenError, InvalidError, NotFoundError
 from discovery.models import Favorite, SavedSearch, SearchHistory
 from discovery.serializers import (
     FavoriteSerializer,
@@ -17,8 +17,12 @@ from discovery.serializers import (
     SearchHistoryWriteSerializer,
     ToggleFavoriteSerializer,
 )
+from discovery.services.feed import build_feed, unified_search
+from discovery.services.freshness import confirm_object, flag_unavailable
+from hotels.models import Hotel
 from listings.models import ListingStatus, Property
 from listings.serializers import PropertySerializer
+from mess.models import Mess
 
 
 class FavoriteListView(APIView):
@@ -216,3 +220,104 @@ class SearchNotificationsView(APIView):
                 },
             )
         return Response(api_success(notifications))
+
+
+def _load_target(target_type: str, target_id):
+    mapping = {
+        'listing': Property,
+        'property': Property,
+        'hotel': Hotel,
+        'mess': Mess,
+    }
+    model = mapping.get((target_type or '').lower())
+    if not model:
+        raise InvalidError('targetType must be listing, hotel, or mess.')
+    try:
+        return model.objects.get(pk=target_id)
+    except model.DoesNotExist as exc:
+        raise NotFoundError('Item not found.') from exc
+
+
+def _assert_owner(user, obj):
+    owner_id = getattr(obj, 'owner_id', None)
+    if owner_id != user.id and user.role != 'admin':
+        raise ForbiddenError('Only the owner can confirm this listing.')
+
+
+class DiscoverFeedView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        limit = int(request.query_params.get('limit', 8))
+        limit = max(1, min(limit, 24))
+        return Response(api_success(build_feed(request, limit=limit)))
+
+
+class DiscoverSearchView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        return Response(api_success(unified_search(request)))
+
+
+class DiscoverConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        target_type = request.data.get('targetType') or request.data.get('type')
+        target_id = request.data.get('id') or request.data.get('targetId')
+        if not target_id:
+            raise InvalidError('id is required.')
+        obj = _load_target(target_type, target_id)
+        _assert_owner(request.user, obj)
+        confirm_object(obj)
+        return Response(api_success({'confirmed': True, 'id': str(obj.id)}))
+
+
+class DiscoverReportView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        target_type = request.data.get('targetType') or request.data.get('type')
+        target_id = request.data.get('id') or request.data.get('targetId')
+        if not target_id:
+            raise InvalidError('id is required.')
+        obj = _load_target(target_type, target_id)
+        flag_unavailable(obj)
+        return Response(api_success({'reported': True, 'id': str(obj.id)}))
+
+
+class HeartbeatPublicView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request, token):
+        from discovery.models import HeartbeatPing
+        from discovery.services.heartbeat import serialize_ping_public
+
+        ping = HeartbeatPing.objects.filter(token=token).first()
+        if not ping:
+            raise NotFoundError('This confirm link is invalid.')
+        return Response(api_success(serialize_ping_public(ping)))
+
+    def post(self, request, token):
+        from django.core.exceptions import ObjectDoesNotExist
+
+        from discovery.models import HeartbeatPing
+        from discovery.services.heartbeat import respond_to_ping, serialize_ping_public
+
+        ping = HeartbeatPing.objects.filter(token=token).first()
+        if not ping:
+            raise NotFoundError('This confirm link is invalid.')
+        action = (request.data.get('action') or '').strip().lower()
+        try:
+            ping = respond_to_ping(ping, action)
+        except ValueError as exc:
+            if str(exc) == 'expired':
+                raise InvalidError('This confirm link has expired.') from exc
+            raise InvalidError('Use action "available" or "full".') from exc
+        except ObjectDoesNotExist as exc:
+            raise NotFoundError('The listing is no longer on the platform.') from exc
+        return Response(api_success(serialize_ping_public(ping)))

@@ -37,16 +37,36 @@ def _check_rate_limit(phone: str, purpose: str) -> None:
     if count >= limit:
         raise InvalidError('Too many OTP requests. Try again later.')
     if count == 0:
-        cache.set(key, 1, window)
+        cache.set(key, 1, timeout=window)
     else:
         cache.incr(key)
 
 
-def _generate_code() -> str:
-    fixed = getattr(settings, 'OTP_DEV_FIXED_CODE', '') or ''
-    if settings.DEBUG and fixed:
+def _sms_provider() -> str:
+    return (getattr(settings, 'SMS_PROVIDER', 'console') or 'console').lower()
+
+
+def _generate_code(*, real_sms: bool) -> str:
+    """
+    Real BulkSMSBD delivery → always random 6-digit code.
+    Console / local-only → optional fixed DEBUG code for easy testing.
+    """
+    if real_sms:
+        return f'{secrets.randbelow(10**OTP_LENGTH):0{OTP_LENGTH}d}'
+    fixed = (getattr(settings, 'OTP_DEV_FIXED_CODE', '') or '').strip()
+    if settings.DEBUG and fixed and len(fixed) == OTP_LENGTH and fixed.isdigit():
         return fixed
     return f'{secrets.randbelow(10**OTP_LENGTH):0{OTP_LENGTH}d}'
+
+
+def _otp_message(code: str) -> str:
+    brand = (
+        getattr(settings, 'OTP_SMS_PREFIX', '')
+        or getattr(settings, 'SMS_BRAND_NAME', '')
+        or 'SmartLiving'
+    ).strip() or 'SmartLiving'
+    minutes = OTP_TTL_SECONDS // 60
+    return f'{brand}: Your verification code is {code}. Valid for {minutes} minutes.'
 
 
 def request_otp(
@@ -57,11 +77,16 @@ def request_otp(
 ) -> dict:
     """
     Create OTP challenge and send SMS.
-    Returns public payload; includes `dev_otp` only when DEBUG.
+
+    Returns public payload. Includes `dev_otp` only when the code was NOT
+    delivered by a live SMS gateway (console / DEBUG fallback) so the UI
+    can autofill for local testing.
     """
     _check_rate_limit(phone, purpose)
 
-    code = _generate_code()
+    provider = _sms_provider()
+    real_sms = provider in ('bulksmsbd', 'bulksms', 'bulksmsbd.net')
+    code = _generate_code(real_sms=real_sms)
     now = timezone.now()
 
     # Invalidate prior unused challenges for same phone+purpose
@@ -72,7 +97,7 @@ def request_otp(
         expires_at__gt=now,
     ).update(consumed_at=now)
 
-    OTPChallenge.objects.create(
+    challenge = OTPChallenge.objects.create(
         phone=phone,
         code_hash=_hash_code(code),
         purpose=purpose,
@@ -80,18 +105,24 @@ def request_otp(
         user=user,
     )
 
-    sender = getattr(settings, 'SMS_SENDER_ID', 'SmartLiving')
-    send_sms(
-        phone,
-        f'{sender}: Your verification code is {code}. Valid for {OTP_TTL_SECONDS // 60} minutes.',
-    )
+    try:
+        delivery = send_sms(phone, _otp_message(code))
+    except Exception:
+        challenge.consumed_at = timezone.now()
+        challenge.save(update_fields=['consumed_at', 'updated_at'])
+        raise
+
+    channel = (delivery or {}).get('channel', 'console')
+    delivered = bool((delivery or {}).get('delivered'))
 
     payload = {
         'phone': phone,
         'expires_in': OTP_TTL_SECONDS,
         'purpose': purpose,
+        'sms_delivered': delivered and channel != 'console',
     }
-    if settings.DEBUG:
+    # Autofill hint only when the user cannot read a phone SMS
+    if settings.DEBUG and channel == 'console':
         payload['dev_otp'] = code
     return payload
 

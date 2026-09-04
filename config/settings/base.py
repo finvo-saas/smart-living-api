@@ -148,7 +148,7 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-MEDIA_URL = 'media/'
+MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -163,12 +163,28 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS)
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
     return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# httpOnly session cookies (refresh JWT + trusted device).
+# Local: keep frontend and API on the same site (localhost vs localhost).
+# Cross-site production (app vs api host): AUTH_COOKIE_SAMESITE=None and HTTPS.
+AUTH_REFRESH_COOKIE_NAME = os.environ.get('AUTH_REFRESH_COOKIE_NAME', 'sl_refresh')
+AUTH_DEVICE_COOKIE_NAME = os.environ.get('AUTH_DEVICE_COOKIE_NAME', 'sl_device')
+AUTH_COOKIE_PATH = os.environ.get('AUTH_COOKIE_PATH', '/api/v1/auth/')
+AUTH_COOKIE_SAMESITE = os.environ.get('AUTH_COOKIE_SAMESITE', 'Lax')
+AUTH_COOKIE_SECURE = _env_bool('AUTH_COOKIE_SECURE', not DEBUG)
+AUTH_COOKIE_DOMAIN = os.environ.get('AUTH_COOKIE_DOMAIN', '')
+AUTH_DEVICE_TTL_DAYS = int(os.environ.get('AUTH_DEVICE_TTL_DAYS', '90'))
+PIN_MAX_ATTEMPTS = int(os.environ.get('PIN_MAX_ATTEMPTS', '5'))
+PIN_LOCK_SECONDS = int(os.environ.get('PIN_LOCK_SECONDS', '900'))
 
 
 # Redis / cache — USE_REDIS_CACHE=false avoids hanging when Redis is down (dev default via settings.dev)
@@ -205,7 +221,10 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_ENABLED = _env_bool('CELERY_BEAT_ENABLED', False)
+HEARTBEAT_SMS_ENABLED = _env_bool('HEARTBEAT_SMS_ENABLED', False)
 if CELERY_BEAT_ENABLED:
+    from celery.schedules import crontab
+
     CELERY_BEAT_SCHEDULE = {
         'mark-overdue-bills-hourly': {
             'task': 'billing.mark_overdue_bills',
@@ -214,6 +233,26 @@ if CELERY_BEAT_ENABLED:
         'dispatch-due-reminders-every-5-min': {
             'task': 'reports.dispatch_due_reminders',
             'schedule': 300.0,
+        },
+        'send-heartbeats-hourly-window': {
+            'task': 'discovery.send_weekly_heartbeats',
+            'schedule': crontab(minute=10),
+        },
+        'dim-stale-listings-daily': {
+            'task': 'discovery.dim_stale_listings',
+            'schedule': crontab(hour=3, minute=0),
+        },
+        'expire-featured-boosts-hourly': {
+            'task': 'discovery.expire_featured_boosts',
+            'schedule': 3600.0,
+        },
+        'notify-saved-searches-every-15-min': {
+            'task': 'discovery.notify_saved_searches',
+            'schedule': 900.0,
+        },
+        'end-ad-campaigns-hourly': {
+            'task': 'discovery.end_ad_campaigns',
+            'schedule': 3600.0,
         },
     }
 else:
@@ -225,15 +264,82 @@ OTP_RATE_LIMIT_ENABLED = _env_bool('OTP_RATE_LIMIT_ENABLED', True)
 OTP_RATE_LIMIT = int(os.environ.get('OTP_RATE_LIMIT', '5'))
 OTP_RATE_WINDOW_SECONDS = int(os.environ.get('OTP_RATE_WINDOW_SECONDS', '3600'))
 
-# S3 / MinIO storage (phase 0 placeholder — local filesystem fallback in dev)
-AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
-AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
-AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', 'smart-living-media')
-AWS_S3_ENDPOINT_URL = os.environ.get('AWS_S3_ENDPOINT_URL', '')
-AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'us-east-1')
-AWS_S3_USE_SSL = os.environ.get('AWS_S3_USE_SSL', 'true').lower() == 'true'
-AWS_DEFAULT_ACL = None
+# DigitalOcean Spaces (preferred) or S3/MinIO fallback
+AWS_ACCESS_KEY_ID = (
+    os.environ.get('DO_ACCESS_KEY', '').strip()
+    or os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
+)
+AWS_SECRET_ACCESS_KEY = (
+    os.environ.get('DO_SECRET_KEY', '').strip()
+    or os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
+)
+AWS_STORAGE_BUCKET_NAME = (
+    os.environ.get('DO_BUCKET', '').strip()
+    or os.environ.get('AWS_STORAGE_BUCKET_NAME', '').strip()
+)
+AWS_S3_ENDPOINT_URL = (
+    os.environ.get('DO_ENDPOINT', '').strip()
+    or os.environ.get('AWS_S3_ENDPOINT_URL', '').strip()
+    or None
+)
+AWS_S3_REGION_NAME = (
+    os.environ.get('DO_REGION', '').strip()
+    or os.environ.get('AWS_S3_REGION_NAME', 'sgp1')
+)
+_do_url = os.environ.get('DO_URL', '').strip().rstrip('/')
+AWS_S3_CUSTOM_DOMAIN = (
+    _do_url.replace('https://', '').replace('http://', '') or None
+)
+AWS_S3_URL_PROTOCOL = 'https:'
+AWS_S3_USE_SSL = True
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_S3_ADDRESSING_STYLE = 'virtual'
 AWS_S3_FILE_OVERWRITE = False
+AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+AWS_LOCATION = (
+    os.environ.get('ROOT_FOLDER', 'smart-living').strip().strip('/')
+    or 'smart-living'
+)
+# S3-compatible object storage (DigitalOcean Spaces today; AWS S3 later).
+# Same backends — change credentials/endpoint, not application code.
+# AWS S3: set AWS_* and leave DO_* / AWS_S3_ENDPOINT_URL empty.
+USE_OBJECT_STORAGE = bool(
+    AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_STORAGE_BUCKET_NAME
+)
+
+if USE_OBJECT_STORAGE:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'core.storage.PublicMediaStorage',
+            'OPTIONS': {
+                'default_acl': 'public-read',
+                'querystring_auth': False,
+                'file_overwrite': False,
+            },
+        },
+        'private': {
+            'BACKEND': 'core.storage.PrivateMediaStorage',
+            'OPTIONS': {
+                'default_acl': 'private',
+                'querystring_auth': True,
+                'querystring_expire': 3600,
+                'custom_domain': None,
+                'file_overwrite': False,
+            },
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+else:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
 
 # DRF
 REST_FRAMEWORK = {
@@ -273,20 +379,22 @@ if API_THROTTLING_ENABLED:
         'core.throttling.ConfigurableUserRateThrottle',
     )
 
+JWT_REFRESH_DAYS = int(os.environ.get('JWT_REFRESH_DAYS', '30'))
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(
         minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '15')),
     ),
     'REFRESH_TOKEN_LIFETIME': timedelta(
-        days=int(os.environ.get('JWT_REFRESH_DAYS', '7')),
+        days=JWT_REFRESH_DAYS,
     ),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-# OTP — fixed code only when DEBUG (SMS console stub)
-OTP_DEV_FIXED_CODE = os.environ.get('OTP_DEV_FIXED_CODE', '123456')
+# OTP — fixed DEBUG code only when SMS is console/fallback (leave empty for random)
+OTP_DEV_FIXED_CODE = os.environ.get('OTP_DEV_FIXED_CODE', '').strip()
+OTP_SMS_PREFIX = os.environ.get('OTP_SMS_PREFIX', 'SmartLiving').strip() or 'SmartLiving'
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Smart Living API',
@@ -307,6 +415,44 @@ PAYMENT_SANDBOX_AUTO_COMPLETE = os.environ.get(
     'true' if DEBUG else 'false',
 ).lower() == 'true'
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+PUSH_ENABLED = _env_bool('PUSH_ENABLED', True)
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '').strip()
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '').strip()
+VAPID_SUBJECT = os.environ.get(
+    'VAPID_SUBJECT',
+    'mailto:support@smartliving.local',
+).strip()
+
+# AI matching — optional OpenAI-compatible LLM (falls back to Bangla/English rules)
+AI_MATCH_LLM_ENABLED = _env_bool('AI_MATCH_LLM_ENABLED', False)
+AI_MATCH_LLM_API_KEY = os.environ.get('AI_MATCH_LLM_API_KEY', '').strip()
+AI_MATCH_LLM_BASE_URL = os.environ.get(
+    'AI_MATCH_LLM_BASE_URL',
+    'https://api.openai.com/v1',
+).strip()
+AI_MATCH_LLM_MODEL = os.environ.get('AI_MATCH_LLM_MODEL', 'gpt-4o-mini').strip()
+
+# CIMS — require registration before property booking
+CIMS_ENFORCE_BOOKING = _env_bool('CIMS_ENFORCE_BOOKING', True)
+
+# Geocoding
+GEOCODER_PROVIDER = os.environ.get('GEOCODER_PROVIDER', 'nominatim').strip().lower()
+GEOCODER_CONTACT_EMAIL = os.environ.get(
+    'GEOCODER_CONTACT_EMAIL',
+    'support@smartliving.local',
+).strip()
+MAPBOX_ACCESS_TOKEN = os.environ.get('MAPBOX_ACCESS_TOKEN', '').strip()
+GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '').strip()
+
+# Email / notify fan-out
+EMAIL_PROVIDER = os.environ.get('EMAIL_PROVIDER', 'console').strip().lower()
+EMAIL_NOTIFY_ENABLED = _env_bool('EMAIL_NOTIFY_ENABLED', True)
+SMS_NOTIFY_ENABLED = _env_bool('SMS_NOTIFY_ENABLED', False)
+DEFAULT_FROM_EMAIL = os.environ.get(
+    'DEFAULT_FROM_EMAIL',
+    'Smart Living <noreply@smartliving.local>',
+)
+
 BKASH_APP_KEY = os.environ.get('BKASH_APP_KEY', '')
 BKASH_APP_SECRET = os.environ.get('BKASH_APP_SECRET', '')
 BKASH_USERNAME = os.environ.get('BKASH_USERNAME', '')
@@ -323,10 +469,20 @@ ROCKET_MERCHANT_ID = os.environ.get('ROCKET_MERCHANT_ID', '')
 ROCKET_API_PASSWORD = os.environ.get('ROCKET_API_PASSWORD', '')
 ROCKET_BASE_URL = os.environ.get('ROCKET_BASE_URL', 'https://sandbox.rocket.com.bd')
 
-# SMS (dev stub logs to console)
-SMS_PROVIDER = os.environ.get('SMS_PROVIDER', 'console')
-SMS_API_KEY = os.environ.get('SMS_API_KEY', '')
-SMS_SENDER_ID = os.environ.get('SMS_SENDER_ID', 'SmartLiving')
+# SMS — BulkSMSBD when SMS_PROVIDER=bulksmsbd
+SMS_PROVIDER = os.environ.get('SMS_PROVIDER', 'console').strip().lower()
+SMS_API_KEY = (
+    os.environ.get('BULKSMSBD_API_KEY', '').strip()
+    or os.environ.get('SMS_API_KEY', '').strip()
+)
+SMS_SENDER_ID = os.environ.get('SMS_SENDER_ID', 'SmartLiving').strip()
+BULKSMSBD_API_URL = os.environ.get(
+    'BULKSMSBD_API_URL',
+    'http://bulksmsbd.net/api/smsapi',
+).strip()
+BULKSMSBD_API_SECRET = os.environ.get('BULKSMSBD_API_SECRET', '').strip()
+BULKSMSBD_API_SENDER = os.environ.get('BULKSMSBD_API_SENDER', '').strip()
+BULKSMSBD_API_SENDER_ID = os.environ.get('BULKSMSBD_API_SENDER_ID', '').strip()
 
 LOGGING = {
     'version': 1,

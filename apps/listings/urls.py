@@ -1,11 +1,13 @@
 from django.urls import path
 
 from listings.views import (
+    AIMatchView,
     FeaturedPropertiesView,
     OwnerListingsView,
     PropertyBatchView,
     PropertyDetailView,
     PropertyListCreateView,
+    PropertyMediaUploadView,
     PropertyMetaView,
     PropertyRecommendationsView,
     PropertyReviewListCreateView,
@@ -19,10 +21,16 @@ urlpatterns = [
     path('properties/meta/', PropertyMetaView.as_view(), name='property-meta'),
     path('properties/mine/', OwnerListingsView.as_view(), name='property-mine'),
     path('properties/batch/', PropertyBatchView.as_view(), name='property-batch'),
+    path('properties/ai-match/', AIMatchView.as_view(), name='property-ai-match'),
     path(
         'properties/<uuid:pk>/',
         PropertyDetailView.as_view(),
         name='property-detail',
+    ),
+    path(
+        'properties/<uuid:pk>/media/',
+        PropertyMediaUploadView.as_view(),
+        name='property-media',
     ),
     path(
         'properties/<uuid:pk>/recommendations/',

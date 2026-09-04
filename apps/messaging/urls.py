@@ -1,5 +1,6 @@
 from django.urls import path
 
+from core.views_sse import ChatMessagesSSEView
 from messaging.views import (
     ChatDetailView,
     ChatListCreateView,
@@ -9,6 +10,9 @@ from messaging.views import (
     NotificationListView,
     NotificationMarkAllReadView,
     NotificationReadView,
+    PushConfigView,
+    PushSubscribeView,
+    PushTestView,
 )
 
 urlpatterns = [
@@ -21,6 +25,11 @@ urlpatterns = [
         ChatMessageListCreateView.as_view(),
         name='chat-messages',
     ),
+    path(
+        'chats/<uuid:pk>/messages/stream/',
+        ChatMessagesSSEView.as_view(),
+        name='chat-messages-sse',
+    ),
     path('notifications/', NotificationListView.as_view(), name='notification-list'),
     path(
         'notifications/mark-all-read/',
@@ -32,4 +41,7 @@ urlpatterns = [
         NotificationReadView.as_view(),
         name='notification-read',
     ),
+    path('push/config/', PushConfigView.as_view(), name='push-config'),
+    path('push/subscribe/', PushSubscribeView.as_view(), name='push-subscribe'),
+    path('push/test/', PushTestView.as_view(), name='push-test'),
 ]

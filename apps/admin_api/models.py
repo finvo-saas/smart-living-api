@@ -201,6 +201,8 @@ class SystemSettings(models.Model):
     feature_flags = models.JSONField(default=dict, blank=True)
     sms_gateway = models.JSONField(default=dict, blank=True)
     email_service = models.JSONField(default=dict, blank=True)
+    heartbeat = models.JSONField(default=dict, blank=True)
+    push = models.JSONField(default=dict, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

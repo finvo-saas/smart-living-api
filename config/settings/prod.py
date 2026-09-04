@@ -5,8 +5,7 @@ from .base import _env_bool  # noqa: E402
 
 DEBUG = False
 
-# Production storage via S3-compatible backend
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# Object storage is configured in base.py via STORAGES (DigitalOcean Spaces).
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SESSION_COOKIE_SECURE = True
@@ -48,6 +47,10 @@ if CELERY_BEAT_ENABLED and not CELERY_BEAT_SCHEDULE:  # noqa: F405
         'dispatch-due-reminders-every-5-min': {
             'task': 'reports.dispatch_due_reminders',
             'schedule': 300.0,
+        },
+        'send-heartbeats-hourly-window': {
+            'task': 'discovery.send_weekly_heartbeats',
+            'schedule': 3600.0,
         },
     }
 

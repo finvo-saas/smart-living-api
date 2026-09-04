@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from django.db import IntegrityError
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -103,6 +104,26 @@ class HotelListCreateView(APIView):
                 qs = qs.filter(average_rating__gte=float(min_rating))
             except ValueError:
                 pass
+        qs = qs.filter(flagged_unavailable_at__isnull=True)
+
+        check_in = request.query_params.get('checkIn')
+        check_out = request.query_params.get('checkOut')
+        if check_in and check_out:
+            from datetime import date as date_cls
+
+            try:
+                start = date_cls.fromisoformat(check_in)
+                end = date_cls.fromisoformat(check_out)
+            except ValueError:
+                start = end = None
+            if start and end:
+                open_ids = []
+                for hotel in qs.prefetch_related('rooms'):
+                    for room in hotel.rooms.filter(available=True):
+                        if not _room_date_conflict(room.id, start, end):
+                            open_ids.append(hotel.id)
+                            break
+                qs = qs.filter(id__in=open_ids)
 
         return Response(api_success(_serialize_hotels(qs, request)))
 
@@ -170,12 +191,69 @@ class HotelRoomListCreateView(APIView):
         _assert_hotel_owner(hotel, request.user)
         serializer = RoomWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        room = serializer.save(hotel=hotel)
+        try:
+            room = serializer.save(hotel=hotel)
+        except IntegrityError as exc:
+            raise InvalidError('A room with this number already exists.') from exc
         hotel.refresh_room_counts()
         return Response(
             api_success(RoomSerializer(room, context={'request': request}).data),
             status=status.HTTP_201_CREATED,
         )
+
+
+class HotelRoomDetailView(APIView):
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def _get_room(self, hotel, room_id):
+        try:
+            return Room.objects.get(pk=room_id, hotel=hotel)
+        except Room.DoesNotExist as exc:
+            raise NotFoundError('Room not found.') from exc
+
+    def get(self, request, pk, room_id):
+        hotel = _get_hotel(pk)
+        room = self._get_room(hotel, room_id)
+        return Response(
+            api_success(RoomSerializer(room, context={'request': request}).data),
+        )
+
+    def patch(self, request, pk, room_id):
+        hotel = _get_hotel(pk)
+        _assert_hotel_owner(hotel, request.user)
+        room = self._get_room(hotel, room_id)
+        serializer = RoomWriteSerializer(room, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            room = serializer.save()
+        except IntegrityError as exc:
+            raise InvalidError('A room with this number already exists.') from exc
+        hotel.refresh_room_counts()
+        return Response(
+            api_success(RoomSerializer(room, context={'request': request}).data),
+        )
+
+    def delete(self, request, pk, room_id):
+        hotel = _get_hotel(pk)
+        _assert_hotel_owner(hotel, request.user)
+        room = self._get_room(hotel, room_id)
+        has_active = HotelBooking.objects.filter(
+            room=room,
+            is_deleted=False,
+            status__in=[
+                HotelBookingStatus.CONFIRMED,
+                HotelBookingStatus.CHECKED_IN,
+                HotelBookingStatus.PENDING,
+            ],
+        ).exists()
+        if has_active:
+            raise ConflictError('Cannot delete a room with active bookings.')
+        room.delete()
+        hotel.refresh_room_counts()
+        return Response(api_success({'deleted': True}))
 
 
 class HotelBookingsView(APIView):
@@ -287,6 +365,7 @@ class HotelBookingsView(APIView):
             special_requests=data.get('specialRequests') or '',
             fee_breakdown=fees,
         )
+        hotel.refresh_room_counts()
         return Response(
             api_success(_serialize_booking(booking, request)),
             status=status.HTTP_201_CREATED,
@@ -339,6 +418,7 @@ class HotelBookingCancelView(APIView):
                 else PaymentStatus.PARTIAL
             )
         booking.save()
+        booking.hotel.refresh_room_counts()
         payload = _serialize_booking(booking, request)
         payload['cancellation'] = refund
         return Response(api_success(payload))

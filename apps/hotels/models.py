@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from django.db.models import Avg, Count
+from django.utils import timezone
 
 from core.models import TimestampedModel, UUIDModel
 
@@ -94,6 +95,9 @@ class Hotel(UUIDModel, TimestampedModel):
 
     verified = models.BooleanField(default=False, db_index=True)
     featured = models.BooleanField(default=False, db_index=True)
+    featured_until = models.DateTimeField(null=True, blank=True)
+    last_confirmed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    flagged_unavailable_at = models.DateTimeField(null=True, blank=True)
 
     average_rating = models.FloatField(default=0)
     total_reviews = models.PositiveIntegerField(default=0)
@@ -131,9 +135,25 @@ class Hotel(UUIDModel, TimestampedModel):
         super().save(*args, **kwargs)
 
     def refresh_room_counts(self):
-        rooms = self.rooms.all()
-        self.total_rooms = rooms.count()
-        self.available_rooms = rooms.filter(available=True).count()
+        rooms = list(self.rooms.all())
+        self.total_rooms = len(rooms)
+        today = timezone.localdate()
+        busy_ids = set(
+            HotelBooking.objects.filter(
+                hotel_id=self.id,
+                is_deleted=False,
+                status__in=[
+                    HotelBookingStatus.CONFIRMED,
+                    HotelBookingStatus.CHECKED_IN,
+                    HotelBookingStatus.PENDING,
+                ],
+                check_in__lte=today,
+                check_out__gt=today,
+            ).values_list('room_id', flat=True)
+        )
+        self.available_rooms = sum(
+            1 for room in rooms if room.available and room.id not in busy_ids
+        )
         self.save(update_fields=['total_rooms', 'available_rooms', 'updated_at'])
 
     def refresh_rating_cache(self):

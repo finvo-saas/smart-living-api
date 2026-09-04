@@ -48,6 +48,13 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
     expiryDate = serializers.DateField(source='expiry_date')
     renewalReminderDays = serializers.JSONField(source='renewal_reminder_days')
     terms = serializers.JSONField(required=False)
+    tenantSignature = serializers.CharField(source='tenant_signature', read_only=True)
+    ownerSignature = serializers.CharField(source='owner_signature', read_only=True)
+    tenantSignedAt = serializers.SerializerMethodField()
+    ownerSignedAt = serializers.SerializerMethodField()
+    tenantSignedName = serializers.CharField(source='tenant_signed_name', read_only=True)
+    ownerSignedName = serializers.CharField(source='owner_signed_name', read_only=True)
+    signatureStatus = serializers.SerializerMethodField()
 
     class Meta:
         model = RentalAgreement
@@ -72,6 +79,13 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
             'renewalReminderDays',
             'status',
             'terms',
+            'tenantSignature',
+            'ownerSignature',
+            'tenantSignedAt',
+            'ownerSignedAt',
+            'tenantSignedName',
+            'ownerSignedName',
+            'signatureStatus',
         ]
 
     def get_flatId(self, obj) -> str | None:
@@ -79,6 +93,21 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
 
     def get_uploadedAt(self, obj) -> str:
         return _dt_str(obj.created_at) or ''
+
+    def get_tenantSignedAt(self, obj):
+        return _dt_str(obj.tenant_signed_at)
+
+    def get_ownerSignedAt(self, obj):
+        return _dt_str(obj.owner_signed_at)
+
+    def get_signatureStatus(self, obj):
+        tenant = bool(obj.tenant_signature)
+        owner = bool(obj.owner_signature)
+        if tenant and owner:
+            return 'fully_signed'
+        if tenant or owner:
+            return 'partially_signed'
+        return 'unsigned'
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

@@ -1,14 +1,16 @@
-from django.db.models import Q
+from django.db.models import Avg, Prefetch, Q
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.envelope import api_success
 from core.exceptions import ForbiddenError, InvalidError, NotFoundError
+from core.services.media import media_storage
 from listings.filters import PropertyFilter
-from listings.models import ListingStatus, Property, PropertyReview
+from listings.models import ListingStatus, Property, PropertyImage, PropertyReview
 from listings.serializers import (
     BatchIdsSerializer,
     OwnerResponseSerializer,
@@ -19,14 +21,28 @@ from listings.serializers import (
 )
 
 
+def _nid_prefetch():
+    from accounts.models import VerificationDocument
+
+    return Prefetch(
+        'owner__verification_documents',
+        queryset=VerificationDocument.objects.filter(
+            verification_type=VerificationDocument.VerificationType.NID,
+            status=VerificationDocument.Status.VERIFIED,
+        ),
+        to_attr='nid_verified_docs',
+    )
+
+
 def _published_qs():
     return (
         Property.objects.filter(
             published=True,
             listing_status=ListingStatus.PUBLISHED,
+            flagged_unavailable_at__isnull=True,
         )
         .select_related('owner')
-        .prefetch_related('image_files')
+        .prefetch_related('image_files', _nid_prefetch())
     )
 
 
@@ -122,6 +138,61 @@ class PropertyDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         prop = serializer.save()
         return Response(api_success(_serialize_one(prop, request)))
+
+
+class PropertyMediaUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, pk):
+        try:
+            prop = Property.objects.get(pk=pk)
+        except Property.DoesNotExist as exc:
+            raise NotFoundError('Listing not found.') from exc
+        if prop.owner_id != request.user.id and request.user.role != 'admin':
+            raise ForbiddenError('You can only upload media for your own listings.')
+
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            raise InvalidError('Choose a photo or video file.')
+        kind = (request.data.get('kind') or 'image').strip().lower()
+        if kind not in ('image', 'video'):
+            raise InvalidError('kind must be image or video.')
+
+        stored = None
+        if kind == 'image':
+            image = PropertyImage(
+                property=prop,
+                sort_order=prop.image_files.count(),
+            )
+            stored = media_storage.save_field(
+                image,
+                'file',
+                uploaded,
+                'image',
+                request=request,
+            )
+            image.url = stored.url
+            image.save()
+            urls = list(prop.image_urls or [])
+            urls.append(stored.url)
+            prop.image_urls = urls
+            prop.save(update_fields=['image_urls', 'updated_at'])
+        else:
+            stored = media_storage.upload(uploaded, kind, request=request)
+            videos = list(prop.videos or [])
+            videos.append(stored.url)
+            update = ['videos', 'updated_at']
+            if not prop.video_thumbnail and request.data.get('thumbnailUrl'):
+                prop.video_thumbnail = request.data.get('thumbnailUrl')
+                update.append('video_thumbnail')
+            prop.videos = videos
+            prop.save(update_fields=update)
+
+        return Response(
+            api_success(_serialize_one(prop, request)),
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class FeaturedPropertiesView(APIView):
@@ -287,6 +358,11 @@ class PropertyReviewListCreateView(APIView):
             comment=data['comment'].strip(),
             stay_duration_months=months,
             verified_stay=bool(months and months >= 1),
+            cleanliness=data.get('cleanliness'),
+            security=data.get('security'),
+            owner_behaviour=data.get('ownerBehaviour'),
+            location=data.get('location'),
+            value_for_money=data.get('valueForMoney'),
         )
         prop.refresh_rating_cache()
         return Response(
@@ -311,18 +387,37 @@ class PropertyReviewSummaryView(APIView):
         distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
         total = 0
         rating_sum = 0
-        for r in reviews.only('rating'):
+        for r in reviews.only(
+            'rating',
+            'cleanliness',
+            'security',
+            'owner_behaviour',
+            'location',
+            'value_for_money',
+        ):
             distribution[r.rating] = distribution.get(r.rating, 0) + 1
             total += 1
             rating_sum += r.rating
 
         avg = round(rating_sum / total, 2) if total else 0
+        cat = reviews.aggregate(
+            cleanliness=Avg('cleanliness'),
+            security=Avg('security'),
+            ownerBehaviour=Avg('owner_behaviour'),
+            location=Avg('location'),
+            valueForMoney=Avg('value_for_money'),
+        )
+        category_averages = {
+            key: round(float(value), 2) if value is not None else None
+            for key, value in cat.items()
+        }
         return Response(
             api_success(
                 {
                     'averageRating': avg,
                     'totalReviews': total,
                     'distribution': distribution,
+                    'categoryAverages': category_averages,
                 },
             ),
         )
@@ -358,3 +453,36 @@ class PropertyReviewRespondView(APIView):
                 PropertyReviewSerializer(review, context={'request': request}).data,
             ),
         )
+
+
+class AIMatchView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        query = (request.query_params.get('q') or '').strip()
+        if not query:
+            raise InvalidError('Provide a search query (q parameter).')
+        try:
+            limit = int(request.query_params.get('limit', 12))
+        except (TypeError, ValueError):
+            limit = 12
+        limit = max(1, min(limit, 50))
+
+        from listings.services.ai_match import ai_match_properties
+
+        result = ai_match_properties(query, limit=limit)
+
+        ctx = {'request': request}
+        items = []
+        for prop, match_score in result['results']:
+            data = PropertySerializer(prop, context=ctx).data
+            data['aiMatchScore'] = match_score
+            items.append(data)
+
+        return Response(api_success({
+            'parsedQuery': result['parsedQuery'],
+            'results': items,
+            'totalCandidates': result['totalCandidates'],
+        }))
+

@@ -141,6 +141,54 @@ class Mess(UUIDModel, TimestampedModel):
     owner_name = models.CharField(max_length=255, blank=True, default='')
     owner_phone = models.CharField(max_length=20, blank=True, default='')
     is_deleted = models.BooleanField(default=False, db_index=True)
+    featured = models.BooleanField(default=False, db_index=True)
+    featured_until = models.DateTimeField(null=True, blank=True)
+    last_confirmed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    flagged_unavailable_at = models.DateTimeField(null=True, blank=True)
+    listing = models.ForeignKey(
+        'listings.Property',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='linked_messes',
+        help_text='Public listing that should mirror this mess seat inventory.',
+    )
+    live_status = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Public live utilities: water/electricity/wifi/meals → ok|warn|down.',
+    )
+    live_status_updated_at = models.DateTimeField(null=True, blank=True)
+    # Public meal / guest pricing (seeker-facing)
+    meals_per_day = models.PositiveSmallIntegerField(default=3)
+    vegetarian_option = models.BooleanField(default=False)
+    meal_monthly_charge = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Optional fixed monthly meal charge shown on public profile.',
+    )
+    guest_meal_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Price per guest meal (মিল).',
+    )
+    meal_off_policy = models.TextField(
+        blank=True,
+        default='',
+        help_text='Rules for turning meals on/off (মিল বন্ধ).',
+    )
+    fish_meat_days_per_week = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text='Typical fish/meat days per week (0–7).',
+    )
+    # Utility profiles for reliability scores
+    water_profile = models.JSONField(default=dict, blank=True)
+    electricity_profile = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = 'mess_mess'
@@ -164,6 +212,9 @@ class Mess(UUIDModel, TimestampedModel):
         self.total_seats = seats.count()
         self.available_seats = seats.filter(status=SeatStatus.AVAILABLE).count()
         self.save(update_fields=['total_seats', 'available_seats', 'updated_at'])
+        from listings.services.inventory import sync_mess_listing
+
+        sync_mess_listing(self)
 
 
 class Seat(UUIDModel, TimestampedModel):
@@ -631,3 +682,191 @@ class MessExpense(UUIDModel, TimestampedModel):
     class Meta:
         db_table = 'mess_expense'
         ordering = ('-date', '-created_at')
+
+
+class MealOffStatus(models.TextChoices):
+    PENDING = 'pending', 'Pending'
+    APPROVED = 'approved', 'Approved'
+    REJECTED = 'rejected', 'Rejected'
+
+
+class MonthCloseStatus(models.TextChoices):
+    OPEN = 'open', 'Open'
+    CLOSED = 'closed', 'Closed'
+
+
+class MemberMealLog(UUIDModel, TimestampedModel):
+    """Per-member daily meal counts for মিল হিসাব (breakfast/lunch/dinner)."""
+
+    mess = models.ForeignKey(Mess, on_delete=models.CASCADE, related_name='meal_logs')
+    student = models.ForeignKey(
+        MessStudent,
+        on_delete=models.CASCADE,
+        related_name='meal_logs',
+    )
+    date = models.DateField(db_index=True)
+    breakfast = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    lunch = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    dinner = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    guest_breakfast = models.PositiveSmallIntegerField(default=0)
+    guest_lunch = models.PositiveSmallIntegerField(default=0)
+    guest_dinner = models.PositiveSmallIntegerField(default=0)
+    notes = models.CharField(max_length=255, blank=True, default='')
+    marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='meal_logs_marked',
+    )
+
+    class Meta:
+        db_table = 'mess_member_meal_log'
+        ordering = ('-date',)
+        constraints = [
+            models.UniqueConstraint(
+                fields=['mess', 'student', 'date'],
+                name='unique_meal_log_per_student_date',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['mess', 'date']),
+        ]
+
+    @property
+    def member_meal_total(self):
+        return self.breakfast + self.lunch + self.dinner
+
+    @property
+    def guest_meal_total(self):
+        return self.guest_breakfast + self.guest_lunch + self.guest_dinner
+
+
+class MealOffRequest(UUIDModel, TimestampedModel):
+    mess = models.ForeignKey(Mess, on_delete=models.CASCADE, related_name='meal_off_requests')
+    student = models.ForeignKey(
+        MessStudent,
+        on_delete=models.CASCADE,
+        related_name='meal_off_requests',
+    )
+    start_date = models.DateField()
+    end_date = models.DateField()
+    meals = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Which meals to skip, e.g. {breakfast:true, lunch:true, dinner:true}',
+    )
+    reason = models.TextField(blank=True, default='')
+    status = models.CharField(
+        max_length=20,
+        choices=MealOffStatus.choices,
+        default=MealOffStatus.PENDING,
+        db_index=True,
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='meal_off_reviews',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'mess_meal_off_request'
+        ordering = ('-created_at',)
+
+
+class MemberDeposit(UUIDModel, TimestampedModel):
+    mess = models.ForeignKey(Mess, on_delete=models.CASCADE, related_name='member_deposits')
+    student = models.ForeignKey(
+        MessStudent,
+        on_delete=models.CASCADE,
+        related_name='deposits',
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    date = models.DateField()
+    note = models.CharField(max_length=255, blank=True, default='')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mess_deposits_created',
+    )
+    is_deleted = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'mess_member_deposit'
+        ordering = ('-date', '-created_at')
+
+
+class MessMonthClose(UUIDModel, TimestampedModel):
+    """Month-end মিল হিসাব snapshot (bazaar → meal rate → member dues)."""
+
+    mess = models.ForeignKey(Mess, on_delete=models.CASCADE, related_name='month_closes')
+    year = models.PositiveIntegerField()
+    month = models.PositiveSmallIntegerField()
+    status = models.CharField(
+        max_length=20,
+        choices=MonthCloseStatus.choices,
+        default=MonthCloseStatus.OPEN,
+        db_index=True,
+    )
+    bazaar_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    fixed_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_meals = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    meal_rate = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    guest_meal_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mess_months_closed',
+    )
+    snapshot = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = 'mess_month_close'
+        ordering = ('-year', '-month')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['mess', 'year', 'month'],
+                name='unique_mess_month_close',
+            ),
+        ]
+
+
+class MemberMonthBill(UUIDModel, TimestampedModel):
+    month_close = models.ForeignKey(
+        MessMonthClose,
+        on_delete=models.CASCADE,
+        related_name='member_bills',
+    )
+    student = models.ForeignKey(
+        MessStudent,
+        on_delete=models.CASCADE,
+        related_name='month_bills',
+    )
+    student_name = models.CharField(max_length=255, blank=True, default='')
+    meal_count = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    meal_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    guest_meals = models.PositiveIntegerField(default=0)
+    guest_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    fixed_share = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    deposits = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    due = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    credit = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = 'mess_member_month_bill'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['month_close', 'student'],
+                name='unique_member_bill_per_close',
+            ),
+        ]

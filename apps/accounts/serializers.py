@@ -9,6 +9,7 @@ from accounts.models import (
     VerificationDocument,
 )
 from accounts.phone import normalize_bd_phone, phone_digits
+from core.services.media import media_storage
 
 
 class PhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -30,9 +31,15 @@ class UserSerializer(serializers.ModelSerializer):
     profilePhotoUrl = serializers.SerializerMethodField()
     roleSelected = serializers.BooleanField(source='role_selected', read_only=True)
     isPhoneVerified = serializers.BooleanField(source='is_phone_verified', read_only=True)
+    hasPin = serializers.SerializerMethodField()
     profilePhoto = serializers.ImageField(source='profile_photo', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
+    heartbeatSmsOptIn = serializers.BooleanField(
+        source='heartbeat_sms_opt_in',
+        read_only=True,
+    )
+    pushOptIn = serializers.BooleanField(source='push_opt_in', read_only=True)
 
     class Meta:
         model = User
@@ -45,10 +52,13 @@ class UserSerializer(serializers.ModelSerializer):
             'role',
             'roleSelected',
             'isPhoneVerified',
+            'hasPin',
             'profilePhoto',
             'profilePhotoUrl',
             'locale',
             'adminRole',
+            'heartbeatSmsOptIn',
+            'pushOptIn',
             'createdAt',
             'updatedAt',
         )
@@ -57,25 +67,52 @@ class UserSerializer(serializers.ModelSerializer):
     def get_adminRole(self, obj):
         return obj.admin_role
 
+    def get_hasPin(self, obj):
+        return obj.has_pin
+
     def get_phoneDigits(self, obj):
         return phone_digits(obj.phone)
 
     def get_profilePhotoUrl(self, obj):
         if not obj.profile_photo:
             return None
-        request = self.context.get('request')
-        url = obj.profile_photo.url
-        if request is not None:
-            return request.build_absolute_uri(url)
-        return url
+        return media_storage.absolute_url(
+            obj.profile_photo.url,
+            request=self.context.get('request'),
+        )
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     profilePhoto = serializers.ImageField(source='profile_photo', required=False)
+    heartbeatSmsOptIn = serializers.BooleanField(
+        source='heartbeat_sms_opt_in',
+        required=False,
+    )
+    pushOptIn = serializers.BooleanField(source='push_opt_in', required=False)
 
     class Meta:
         model = User
-        fields = ('name', 'email', 'locale', 'profilePhoto')
+        fields = (
+            'name',
+            'email',
+            'locale',
+            'profilePhoto',
+            'heartbeatSmsOptIn',
+            'pushOptIn',
+        )
+
+    def validate_profilePhoto(self, value):
+        if value:
+            media_storage.validate(value, 'profile')
+        return value
+
+    def update(self, instance, validated_data):
+        photo = validated_data.pop('profile_photo', None)
+        instance = super().update(instance, validated_data)
+        if photo is not None:
+            media_storage.save_field(instance, 'profile_photo', photo, 'profile')
+            instance.save(update_fields=['profile_photo', 'updated_at'])
+        return instance
 
 
 class OTPRequestSerializer(serializers.Serializer):
@@ -142,7 +179,38 @@ class RecoverAccountSerializer(serializers.Serializer):
 
 
 class LogoutSerializer(serializers.Serializer):
-    refresh = serializers.CharField()
+    refresh = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class LoginStartSerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=20)
+
+    def validate_phone(self, value):
+        return normalize_bd_phone(value)
+
+
+class PinLoginSerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=20)
+    pin = serializers.CharField(max_length=6, min_length=4)
+
+    def validate_phone(self, value):
+        return normalize_bd_phone(value)
+
+
+class PinSetSerializer(serializers.Serializer):
+    pin = serializers.CharField(max_length=6, min_length=4)
+    confirmPin = serializers.CharField(
+        max_length=6,
+        required=False,
+        allow_blank=True,
+        default='',
+    )
+    currentPin = serializers.CharField(
+        max_length=6,
+        required=False,
+        allow_blank=True,
+        default='',
+    )
 
 
 class VerificationDocumentSerializer(serializers.ModelSerializer):
@@ -150,6 +218,7 @@ class VerificationDocumentSerializer(serializers.ModelSerializer):
     verificationType = serializers.CharField(source='verification_type', read_only=True)
     documentNumber = serializers.CharField(source='document_number', read_only=True)
     documentFileName = serializers.CharField(source='file_name', read_only=True)
+    fileUrl = serializers.SerializerMethodField()
     submittedAt = serializers.DateTimeField(source='created_at', read_only=True)
     reviewedAt = serializers.DateTimeField(source='reviewed_at', read_only=True)
     rejectionReason = serializers.CharField(source='rejection_reason', read_only=True)
@@ -162,12 +231,18 @@ class VerificationDocumentSerializer(serializers.ModelSerializer):
             'verificationType',
             'documentNumber',
             'documentFileName',
+            'fileUrl',
             'status',
             'submittedAt',
             'reviewedAt',
             'rejectionReason',
         )
         read_only_fields = fields
+
+    def get_fileUrl(self, obj):
+        if not obj.file:
+            return ''
+        return media_storage.absolute_url(obj.file.url, request=self.context.get('request'))
 
 
 class VerificationSubmitSerializer(serializers.Serializer):
@@ -225,11 +300,19 @@ class VerificationSubmitSerializer(serializers.Serializer):
             or attrs.get('document_file_name')
             or ''
         )
+        file_obj = attrs.get('file')
+        if not file_obj:
+            raise serializers.ValidationError(
+                {'file': 'Upload a photo or PDF of the document.'},
+            )
+        media_storage.validate(file_obj, 'verification')
+        if not file_name:
+            file_name = getattr(file_obj, 'name', '') or ''
         return {
             'verification_type': vtype,
             'document_number': number,
             'document_file_name': file_name,
-            'file': attrs.get('file'),
+            'file': file_obj,
         }
 
 

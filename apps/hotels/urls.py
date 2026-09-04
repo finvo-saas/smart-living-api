@@ -7,6 +7,7 @@ from hotels.views import (
     HotelListCreateView,
     HotelPricingUpdateView,
     HotelReviewListCreateView,
+    HotelRoomDetailView,
     HotelRoomListCreateView,
     MyHotelBookingsView,
     OwnerHotelsView,
@@ -43,6 +44,11 @@ urlpatterns = [
         'hotels/<uuid:pk>/rooms/<uuid:room_id>/pricing/',
         RoomPricingDetailView.as_view(),
         name='hotel-room-pricing-detail',
+    ),
+    path(
+        'hotels/<uuid:pk>/rooms/<uuid:room_id>/',
+        HotelRoomDetailView.as_view(),
+        name='hotel-room-detail',
     ),
     path(
         'hotels/<uuid:pk>/bookings/',

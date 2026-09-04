@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 
+from django.conf import settings
 from django.utils import timezone
 
 from accounts.services.sms import send_sms
@@ -102,7 +103,7 @@ def send_bulk_sms(mess: Mess, user, data: dict) -> SMSMessage:
         total_recipients=total,
         status=SMSStatus.PENDING,
         sent_by=user,
-        gateway=data.get('gateway', '') or 'console',
+        gateway=data.get('gateway', '') or getattr(settings, 'SMS_PROVIDER', 'console'),
         metadata=data.get('metadata', {}) or {},
     )
 

@@ -1,7 +1,7 @@
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -252,3 +252,96 @@ class NotificationMarkAllReadView(APIView):
     def post(self, request):
         updated = Notification.objects.filter(user=request.user, read=False).update(read=True)
         return Response(api_success({'updated': updated}))
+
+
+class PushConfigView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from messaging.services.push import (
+            get_push_config,
+            is_push_configured,
+            should_send_push,
+            vapid_public_key,
+        )
+
+        cfg = get_push_config()
+        live = should_send_push(cfg)
+        return Response(
+            api_success(
+                {
+                    'enabled': live,
+                    'configured': is_push_configured(),
+                    'publicKey': vapid_public_key() if live else '',
+                    'heartbeatEnabled': bool(cfg.get('heartbeatEnabled')),
+                },
+            ),
+        )
+
+
+class PushSubscribeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from django.utils import timezone as dj_tz
+
+        from messaging.models import PushSubscription
+
+        endpoint = (request.data.get('endpoint') or '').strip()
+        keys = request.data.get('keys') or {}
+        p256dh = (keys.get('p256dh') or request.data.get('p256dh') or '').strip()
+        auth = (keys.get('auth') or request.data.get('auth') or '').strip()
+        if not endpoint or not p256dh or not auth:
+            raise InvalidError('endpoint, keys.p256dh and keys.auth are required.')
+        ua = (request.META.get('HTTP_USER_AGENT') or '')[:300]
+        sub, _created = PushSubscription.objects.update_or_create(
+            endpoint=endpoint,
+            defaults={
+                'user': request.user,
+                'p256dh': p256dh,
+                'auth': auth,
+                'user_agent': ua,
+                'last_seen_at': dj_tz.now(),
+                'fail_count': 0,
+            },
+        )
+        return Response(
+            api_success({'id': str(sub.id), 'endpoint': sub.endpoint}),
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request):
+        from messaging.models import PushSubscription
+
+        endpoint = (request.data.get('endpoint') or '').strip()
+        if not endpoint:
+            raise InvalidError('endpoint is required.')
+        PushSubscription.objects.filter(
+            user=request.user,
+            endpoint=endpoint,
+        ).delete()
+        return Response(api_success({'removed': True}))
+
+
+class PushTestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from messaging.services.push import notify_user, should_send_push
+
+        if not should_send_push():
+            raise InvalidError(
+                'Web push is off or VAPID keys are missing. Check admin settings and .env.',
+            )
+        result = notify_user(
+            request.user,
+            title='Smart Living',
+            body='Push notifications are working on this device.',
+            url='/notifications',
+            tag='push-test',
+        )
+        if result.get('sent', 0) < 1:
+            raise InvalidError(
+                'No active browser subscription. Allow notifications in this browser first.',
+            )
+        return Response(api_success(result))

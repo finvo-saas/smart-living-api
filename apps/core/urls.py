@@ -1,9 +1,10 @@
 from django.urls import include, path
 
-from core.views import HealthCheckView
+from core.views import HealthCheckView, MediaUploadView
 
 urlpatterns = [
     path('health/', HealthCheckView.as_view(), name='health'),
+    path('media/upload/', MediaUploadView.as_view(), name='media-upload'),
     path('', include('accounts.urls')),
     path('', include('listings.urls')),
     path('', include('discovery.urls')),

@@ -12,9 +12,7 @@ MIDDLEWARE = [
 
 INTERNAL_IPS = ['127.0.0.1', 'localhost']
 
-# Dev: use local media storage (cache/Celery toggles come from base + .env)
-DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
-
+# Media goes to DigitalOcean Spaces when DO_* keys are set (see base.STORAGES).
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
 # Safe defaults when .env omits them — never block on Redis/broker in local runserver

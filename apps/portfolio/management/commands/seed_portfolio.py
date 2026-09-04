@@ -52,12 +52,12 @@ class Command(BaseCommand):
             ),
         )
 
-        renter_phone = '+8801711111111'
+        renter_phone = '+8801710000001'
         renter, _ = User.objects.get_or_create(
             phone=renter_phone,
             defaults={
                 'name': 'Rahim Uddin',
-                'email': 'rahim@example.com',
+                'email': 'rahim.uddin@gmail.com',
                 'role': Role.RENTER,
                 'is_phone_verified': True,
                 'role_selected': True,
@@ -109,7 +109,9 @@ class Command(BaseCommand):
             flats[flat_number] = flat
 
         occupied = flats['1A']
-        Tenancy.objects.filter(flat=occupied, status=TenancyStatus.ACTIVE).update(
+        Tenancy.objects.filter(flat=occupied, status=TenancyStatus.ACTIVE).exclude(
+            tenant=renter,
+        ).update(
             status=TenancyStatus.ENDED,
             end_date=timezone.localdate(),
         )

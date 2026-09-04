@@ -67,7 +67,24 @@ class FeaturedBoost(UUIDModel, TimestampedModel):
         Property,
         on_delete=models.CASCADE,
         related_name='boosts',
+        null=True,
+        blank=True,
     )
+    hotel = models.ForeignKey(
+        'hotels.Hotel',
+        on_delete=models.CASCADE,
+        related_name='boosts',
+        null=True,
+        blank=True,
+    )
+    mess = models.ForeignKey(
+        'mess.Mess',
+        on_delete=models.CASCADE,
+        related_name='boosts',
+        null=True,
+        blank=True,
+    )
+    target_type = models.CharField(max_length=20, default='listing', db_index=True)
     boost_option_id = models.CharField(max_length=64)
     duration_days = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -77,3 +94,83 @@ class FeaturedBoost(UUIDModel, TimestampedModel):
     class Meta:
         db_table = 'subscriptions_featured_boost'
         ordering = ('-paid_at',)
+
+
+class AdCampaign(UUIDModel, TimestampedModel):
+    """Time-boxed ad campaign with inventory awareness and basic analytics."""
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        ACTIVE = 'active', 'Active'
+        PAUSED = 'paused', 'Paused'
+        ENDED = 'ended', 'Ended'
+
+    class TargetType(models.TextChoices):
+        LISTING = 'listing', 'Listing'
+        MESS = 'mess', 'Mess'
+        HOTEL = 'hotel', 'Hotel'
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='ad_campaigns',
+    )
+    name = models.CharField(max_length=120)
+    target_type = models.CharField(max_length=20, choices=TargetType.choices)
+    listing = models.ForeignKey(
+        Property,
+        on_delete=models.CASCADE,
+        related_name='ad_campaigns',
+        null=True,
+        blank=True,
+    )
+    hotel = models.ForeignKey(
+        'hotels.Hotel',
+        on_delete=models.CASCADE,
+        related_name='ad_campaigns',
+        null=True,
+        blank=True,
+    )
+    mess = models.ForeignKey(
+        'mess.Mess',
+        on_delete=models.CASCADE,
+        related_name='ad_campaigns',
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        db_index=True,
+    )
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    daily_budget = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    bid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=50)
+    quality_score = models.PositiveSmallIntegerField(default=50)
+    impressions = models.PositiveIntegerField(default=0)
+    clicks = models.PositiveIntegerField(default=0)
+    spend = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    vacancy_flash = models.BooleanField(
+        default=False,
+        help_text='Auto-created 24–72h burst when inventory frees up.',
+    )
+
+    class Meta:
+        db_table = 'subscriptions_ad_campaign'
+        ordering = ('-created_at',)
+
+    @property
+    def is_live(self) -> bool:
+        now = timezone.now()
+        return (
+            self.status == self.Status.ACTIVE
+            and self.starts_at <= now <= self.ends_at
+        )
+
+    @property
+    def rank_score(self) -> float:
+        """Auction + quality ranking score."""
+        return float(self.bid_amount) * (self.quality_score / 100.0)
+

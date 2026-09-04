@@ -23,8 +23,8 @@ cp .env.example .env
 docker compose up -d
 
 python manage.py migrate
-python manage.py seed_demo_admins   # demo admin phones for role selection
-python manage.py createsuperuser
+python manage.py seed_all          # Bangladesh catalog: users, listings, hotels, mess, bills…
+# Re-run anytime — commands are idempotent. Optional: seed_all --flush
 python manage.py runserver 8000
 ```
 

@@ -6,10 +6,14 @@ from subscriptions.models import OwnerSubscription, SubscriptionPlan
 class SubscriptionPlanSerializer(serializers.ModelSerializer):
     tier = serializers.CharField(read_only=True)
     maxFlats = serializers.IntegerField(source='max_flats', read_only=True)
+    price = serializers.SerializerMethodField()
 
     class Meta:
         model = SubscriptionPlan
         fields = ('tier', 'name', 'price', 'maxFlats', 'features', 'highlighted')
+
+    def get_price(self, obj):
+        return float(obj.price)
 
 
 class OwnerSubscriptionSerializer(serializers.ModelSerializer):
@@ -40,5 +44,12 @@ class UpgradePlanSerializer(serializers.Serializer):
 
 
 class FeaturedBoostSerializer(serializers.Serializer):
-    listingId = serializers.UUIDField()
+    listingId = serializers.UUIDField(required=False)
+    hotelId = serializers.UUIDField(required=False)
+    messId = serializers.UUIDField(required=False)
+    targetType = serializers.ChoiceField(
+        choices=['listing', 'hotel', 'mess'],
+        required=False,
+        default='listing',
+    )
     boostId = serializers.CharField()

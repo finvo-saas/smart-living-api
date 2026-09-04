@@ -1,10 +1,13 @@
 from django.db import transaction
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -16,12 +19,15 @@ from accounts.models import (
     VerificationDocument,
 )
 from accounts.serializers import (
+    LoginStartSerializer,
     LogoutSerializer,
     OTPRequestSerializer,
     OTPVerifySerializer,
     PhoneChangeConfirmSerializer,
     PhoneChangeRequestSerializer,
     PhoneTokenObtainPairSerializer,
+    PinLoginSerializer,
+    PinSetSerializer,
     RecoverAccountSerializer,
     RenterProfileSerializer,
     RoleSelectSerializer,
@@ -30,40 +36,90 @@ from accounts.serializers import (
     VerificationDocumentSerializer,
     VerificationSubmitSerializer,
 )
+from accounts.services.cookies import clear_refresh_cookie, read_refresh_token
+from accounts.services.devices import resolve_trusted_device
 from accounts.services.otp import request_otp, verify_otp
-from accounts.services.tokens import issue_tokens_for_user
+from accounts.services.pin import (
+    assert_pin_not_locked,
+    can_set_pin_without_current,
+    clear_pin_failures,
+    grant_pin_unlock,
+    record_pin_failure,
+    set_user_pin,
+    validate_pin,
+)
+from accounts.services.session import auth_response, user_payload
 from core.envelope import api_success
 from core.exceptions import ForbiddenError, InvalidError, NotFoundError
+from core.services.media import media_storage
 from core.throttling import OTPRateThrottle
 
 
 class PhoneTokenObtainPairView(TokenObtainPairView):
-    """Dev fallback: phone + password JWT (prefer OTP for SPA)."""
+    """Dev fallback: phone + password JWT (prefer OTP/PIN for SPA)."""
 
     serializer_class = PhoneTokenObtainPairSerializer
 
 
 def _user_payload(user, request=None) -> dict:
-    return UserSerializer(user, context={'request': request}).data
+    return user_payload(user, request)
 
 
-def _available_roles(user: User) -> list[str]:
-    roles = [Role.RENTER, Role.OWNER]
-    admin = getattr(user, 'admin_profile', None)
-    if admin and admin.is_active:
-        roles.append(Role.ADMIN)
-    return roles
+class LoginStartView(APIView):
+    """Decide PIN vs OTP without sending SMS when the user already has a PIN."""
 
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [OTPRateThrottle]
 
-def _auth_success(user: User, request=None) -> dict:
-    tokens = issue_tokens_for_user(user)
-    return {
-        **tokens,
-        'user': _user_payload(user, request),
-        'needsRoleSelection': not user.role_selected,
-        'availableRoles': _available_roles(user),
-        'adminRole': user.admin_role,
-    }
+    def get_throttles(self):
+        # PIN users must not consume the OTP throttle on Continue.
+        serializer = LoginStartSerializer(data=self.request.data)
+        if serializer.is_valid():
+            user = User.objects.filter(
+                phone=serializer.validated_data['phone'],
+                is_active=True,
+            ).first()
+            if user and user.has_pin:
+                return []
+        return super().get_throttles()
+
+    def post(self, request):
+        serializer = LoginStartSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone = serializer.validated_data['phone']
+
+        user = User.objects.filter(phone=phone).first()
+        if user and not user.is_active:
+            raise ForbiddenError('This account has been deactivated.')
+
+        trusted = bool(user and resolve_trusted_device(request, user))
+
+        if user and user.has_pin:
+            return Response(
+                api_success(
+                    {
+                        'next': 'pin',
+                        'phone': phone,
+                        'hasPin': True,
+                        'trustedDevice': trusted,
+                    },
+                ),
+            )
+
+        data = request_otp(phone=phone, purpose=OTPChallenge.Purpose.LOGIN)
+        payload = {
+            'next': 'otp',
+            'phone': data['phone'],
+            'hasPin': False,
+            'trustedDevice': trusted,
+            'expiresIn': data['expires_in'],
+            'purpose': data['purpose'],
+            'smsDelivered': bool(data.get('sms_delivered')),
+        }
+        if 'dev_otp' in data:
+            payload['devOtp'] = data['dev_otp']
+        return Response(api_success(payload), status=status.HTTP_200_OK)
 
 
 class OTPRequestView(APIView):
@@ -92,6 +148,7 @@ class OTPRequestView(APIView):
             'phone': data['phone'],
             'expiresIn': data['expires_in'],
             'purpose': data['purpose'],
+            'smsDelivered': bool(data.get('sms_delivered')),
         }
         if 'dev_otp' in data:
             payload['devOtp'] = data['dev_otp']
@@ -128,8 +185,8 @@ class OTPVerifyView(APIView):
             user.save(update_fields=['is_phone_verified', 'updated_at'])
 
         UserProfile.objects.get_or_create(user=user)
-
-        return Response(api_success(_auth_success(user, request)))
+        grant_pin_unlock(user.pk)
+        return auth_response(user, request)
 
 
 class RoleSelectView(APIView):
@@ -156,11 +213,90 @@ class RoleSelectView(APIView):
             update_fields=['role', 'role_selected', 'is_staff', 'updated_at'],
         )
 
-        return Response(api_success(_auth_success(user, request)))
+        return auth_response(user, request)
+
+
+class CookieTokenRefreshView(APIView):
+    """Rotate refresh from httpOnly cookie (JSON body still accepted)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        raw = read_refresh_token(request)
+        if not raw:
+            raise InvalidError('Session expired. Sign in again.')
+        try:
+            old = RefreshToken(raw)
+            user_id = old['user_id']
+        except TokenError as exc:
+            # Common when two tabs/requests refresh at once (token already rotated).
+            raise InvalidError(
+                'Session expired or already refreshed. Sign in again if this continues.',
+            ) from exc
+
+        user = User.objects.filter(pk=user_id, is_active=True).first()
+        if user is None:
+            raise InvalidError('Session expired. Sign in again.')
+
+        try:
+            old.blacklist()
+        except Exception:
+            pass
+
+        return auth_response(user, request, remember_device=False)
+
+
+class PinLoginView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        serializer = PinLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone = serializer.validated_data['phone']
+        pin = validate_pin(serializer.validated_data['pin'])
+
+        assert_pin_not_locked(phone)
+
+        user = User.objects.filter(phone=phone).first()
+        if user is not None and not user.is_active:
+            raise ForbiddenError('This account has been deactivated.')
+        if (
+            user is None
+            or not user.has_pin
+            or not user.check_password(pin)
+        ):
+            record_pin_failure(phone)
+
+        clear_pin_failures(phone)
+        return auth_response(user, request)
+
+
+class PinSetView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = PinSetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        pin = validate_pin(serializer.validated_data['pin'])
+        confirm = (serializer.validated_data.get('confirmPin') or '').strip()
+        if confirm and confirm != pin:
+            raise InvalidError('PIN confirmation does not match.')
+
+        user = request.user
+        if user.has_pin and not can_set_pin_without_current(user):
+            current = (serializer.validated_data.get('currentPin') or '').strip()
+            if not current or not user.check_password(current):
+                raise InvalidError('Current PIN is required.')
+
+        set_user_pin(user, pin)
+        user.refresh_from_db()
+        return auth_response(user, request)
 
 
 class LogoutView(APIView):
-    """Blacklist refresh token. Access JWT optional (SPA clears tokens first)."""
+    """Blacklist refresh token from cookie or JSON body."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -168,16 +304,20 @@ class LogoutView(APIView):
     def post(self, request):
         serializer = LogoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        try:
-            token = RefreshToken(serializer.validated_data['refresh'])
-            token.blacklist()
-        except Exception as exc:
-            raise InvalidError('Invalid refresh token.') from exc
-        return Response(api_success({'loggedOut': True}))
+        raw = read_refresh_token(request) or serializer.validated_data.get('refresh')
+        if raw:
+            try:
+                RefreshToken(raw).blacklist()
+            except Exception:
+                pass
+        response = Response(api_success({'loggedOut': True}))
+        clear_refresh_cookie(response)
+        return response
 
 
 class CurrentUserView(RetrieveUpdateAPIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_object(self):
         return self.request.user
@@ -222,6 +362,7 @@ class PhoneChangeRequestView(APIView):
             'phone': data['phone'],
             'expiresIn': data['expires_in'],
             'purpose': data['purpose'],
+            'smsDelivered': bool(data.get('sms_delivered')),
         }
         if 'dev_otp' in data:
             payload['devOtp'] = data['dev_otp']
@@ -252,15 +393,13 @@ class PhoneChangeConfirmView(APIView):
         user.is_phone_verified = True
         user.save(update_fields=['phone', 'is_phone_verified', 'updated_at'])
 
-        return Response(
-            api_success(
-                {
-                    'phone': user.phone,
-                    'phoneDigits': _user_payload(user, request)['phoneDigits'],
-                    'user': _user_payload(user, request),
-                    **issue_tokens_for_user(user),
-                },
-            ),
+        return auth_response(
+            user,
+            request,
+            extra={
+                'phone': user.phone,
+                'phoneDigits': _user_payload(user, request)['phoneDigits'],
+            },
         )
 
 
@@ -285,10 +424,8 @@ class RecoverAccountView(APIView):
 
         user.is_phone_verified = True
         user.save(update_fields=['is_phone_verified', 'updated_at'])
-
-        payload = _auth_success(user, request)
-        payload['recovered'] = True
-        return Response(api_success(payload))
+        grant_pin_unlock(user.pk)
+        return auth_response(user, request, extra={'recovered': True})
 
 
 class VerificationStatusView(APIView):
@@ -306,7 +443,10 @@ class VerificationStatusView(APIView):
             request_data = None
         else:
             status_value = latest.status
-            request_data = VerificationDocumentSerializer(latest).data
+            request_data = VerificationDocumentSerializer(
+                latest,
+                context={'request': request},
+            ).data
 
         return Response(
             api_success(
@@ -336,16 +476,17 @@ class VerificationStatusView(APIView):
             getattr(file_obj, 'name', '') if file_obj else ''
         )
 
-        doc = VerificationDocument.objects.create(
+        doc = VerificationDocument(
             user=request.user,
             verification_type=data['verification_type'],
             document_number=data.get('document_number', ''),
-            file=file_obj,
             file_name=file_name,
             status=VerificationDocument.Status.PENDING,
         )
+        media_storage.save_field(doc, 'file', file_obj, 'verification', request=request)
+        doc.save()
         return Response(
-            api_success(VerificationDocumentSerializer(doc).data),
+            api_success(VerificationDocumentSerializer(doc, context={'request': request}).data),
             status=status.HTTP_201_CREATED,
         )
 
@@ -373,3 +514,44 @@ class RenterProfileView(RetrieveUpdateAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(api_success(serializer.data))
+
+
+class CIMSStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        return Response(api_success({
+            'cimsRegistered': profile.cims_registered,
+            'cimsRegistrationNumber': profile.cims_registration_number,
+            'cimsPoliceStation': profile.cims_police_station,
+            'cimsRegisteredAt': profile.cims_registered_at.isoformat() if profile.cims_registered_at else None,
+            'cimsReminderDismissed': profile.cims_reminder_dismissed,
+            'required': request.user.role in ('renter', 'owner'),
+        }))
+
+    def patch(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        data = request.data
+        if 'cimsRegistered' in data:
+            profile.cims_registered = bool(data['cimsRegistered'])
+        if 'cimsRegistrationNumber' in data:
+            profile.cims_registration_number = str(data['cimsRegistrationNumber']).strip()
+        if 'cimsPoliceStation' in data:
+            profile.cims_police_station = str(data['cimsPoliceStation']).strip()
+        if 'cimsRegisteredAt' in data and data['cimsRegisteredAt']:
+            parsed = parse_datetime(data['cimsRegisteredAt'])
+            if parsed:
+                profile.cims_registered_at = parsed
+        if 'cimsReminderDismissed' in data:
+            profile.cims_reminder_dismissed = bool(data['cimsReminderDismissed'])
+        if profile.cims_registered and not profile.cims_registered_at:
+            profile.cims_registered_at = timezone.now()
+        profile.save()
+        return Response(api_success({
+            'cimsRegistered': profile.cims_registered,
+            'cimsRegistrationNumber': profile.cims_registration_number,
+            'cimsPoliceStation': profile.cims_police_station,
+            'cimsRegisteredAt': profile.cims_registered_at.isoformat() if profile.cims_registered_at else None,
+            'cimsReminderDismissed': profile.cims_reminder_dismissed,
+        }))

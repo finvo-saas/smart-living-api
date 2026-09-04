@@ -96,6 +96,13 @@ class Flat(UUIDModel, TimestampedModel):
     area = models.PositiveIntegerField(null=True, blank=True)
     bedrooms = models.PositiveSmallIntegerField(null=True, blank=True)
     bathrooms = models.PositiveSmallIntegerField(null=True, blank=True)
+    listing = models.ForeignKey(
+        'listings.Property',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='linked_flats',
+    )
 
     class Meta:
         db_table = 'portfolio_flat'

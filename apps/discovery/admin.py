@@ -1,21 +1,19 @@
 from django.contrib import admin
 
-from discovery.models import Favorite, SavedSearch, SearchHistory
+from discovery.models import HeartbeatPing
 
 
-@admin.register(Favorite)
-class FavoriteAdmin(admin.ModelAdmin):
-    list_display = ('user', 'property', 'created_at')
-    search_fields = ('user__phone', 'property__name')
-
-
-@admin.register(SavedSearch)
-class SavedSearchAdmin(admin.ModelAdmin):
-    list_display = ('name', 'user', 'is_active', 'match_count', 'updated_at')
-    list_filter = ('is_active',)
-
-
-@admin.register(SearchHistory)
-class SearchHistoryAdmin(admin.ModelAdmin):
-    list_display = ('user', 'result_count', 'created_at')
-    search_fields = ('user__phone',)
+@admin.register(HeartbeatPing)
+class HeartbeatPingAdmin(admin.ModelAdmin):
+    list_display = (
+        'target_name',
+        'target_type',
+        'owner',
+        'status',
+        'dry_run',
+        'sent_at',
+        'expires_at',
+    )
+    list_filter = ('status', 'target_type', 'dry_run')
+    search_fields = ('token', 'target_name', 'owner__phone', 'owner__name')
+    readonly_fields = ('token', 'sent_at', 'responded_at')

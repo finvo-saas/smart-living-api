@@ -346,6 +346,9 @@ class FlatAssignRenterView(APIView):
         flat.status = FlatStatus.OCCUPIED
         flat.save(update_fields=['status', 'updated_at'])
         flat.building.refresh_counts()
+        from listings.services.inventory import sync_flat_listing
+
+        sync_flat_listing(flat)
 
         renter = {
             'id': str(tenant.id),
@@ -379,6 +382,9 @@ class FlatVacateView(APIView):
         flat.status = FlatStatus.AVAILABLE
         flat.save(update_fields=['status', 'updated_at'])
         flat.building.refresh_counts()
+        from listings.services.inventory import sync_flat_listing
+
+        sync_flat_listing(flat)
         return Response(api_success(_serialize_flat(flat)))
 
 

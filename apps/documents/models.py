@@ -49,6 +49,12 @@ class RentalAgreement(UUIDModel, TimestampedModel):
     )
     terms = models.JSONField(default=dict, blank=True)
     is_deleted = models.BooleanField(default=False)
+    tenant_signature = models.TextField(blank=True, default='')
+    owner_signature = models.TextField(blank=True, default='')
+    tenant_signed_at = models.DateTimeField(null=True, blank=True)
+    owner_signed_at = models.DateTimeField(null=True, blank=True)
+    tenant_signed_name = models.CharField(max_length=255, blank=True, default='')
+    owner_signed_name = models.CharField(max_length=255, blank=True, default='')
 
     class Meta:
         db_table = 'documents_rental_agreement'

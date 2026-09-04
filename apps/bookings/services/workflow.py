@@ -33,6 +33,20 @@ def _display_name(user) -> str:
 
 
 def create_booking(user, data: dict) -> PropertyBooking:
+    from django.conf import settings
+
+    if getattr(settings, 'CIMS_ENFORCE_BOOKING', True):
+        from accounts.models import Role, UserProfile
+
+        if getattr(user, 'role', None) in (Role.RENTER, Role.OWNER, 'renter', 'owner'):
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            if not profile.cims_registered:
+                raise ForbiddenError(
+                    'CIMS registration is required before booking. '
+                    'Complete CIMS details in Profile (DMP compliance).',
+                    code='CIMS_REQUIRED',
+                )
+
     try:
         prop = Property.objects.select_related('owner').get(pk=data['property_id'])
     except Property.DoesNotExist as exc:

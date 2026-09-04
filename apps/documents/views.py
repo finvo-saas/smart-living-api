@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 
 from accounts.models import Role
 from core.envelope import api_success
-from core.exceptions import ForbiddenError, NotFoundError
+from core.exceptions import ForbiddenError, InvalidError, NotFoundError
 from documents.constants import CHECKLIST_CATEGORIES
 from documents.models import AgreementRenewal, Checklist, RentalAgreement
 from documents.serializers import (
@@ -46,7 +46,23 @@ class AgreementListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = _agreement_qs().filter(user=request.user).order_by('-created_at')
+        from django.db.models import Q
+
+        if request.user.role == Role.ADMIN:
+            qs = _agreement_qs()
+        elif request.user.role == Role.OWNER:
+            from listings.models import Property
+
+            owned = Property.objects.filter(owner=request.user).values_list(
+                'id',
+                flat=True,
+            )
+            qs = _agreement_qs().filter(
+                Q(user=request.user) | Q(property_id__in=owned),
+            )
+        else:
+            qs = _agreement_qs().filter(user=request.user)
+        qs = qs.order_by('-created_at')
         return Response(api_success(RentalAgreementSerializer(qs, many=True).data))
 
     def post(self, request):
@@ -120,6 +136,58 @@ class AgreementRenewalCreateView(APIView):
         )
 
 
+class PRCATemplateListView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from documents.services.prca_templates import get_template_list
+        return Response(api_success(get_template_list()))
+
+
+class PRCAGenerateTermsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from datetime import date as date_type
+
+        from documents.services.prca_templates import generate_terms
+
+        data = request.data
+        template_key = data.get('templateKey', 'residential_monthly')
+        try:
+            start = date_type.fromisoformat(str(data.get('startDate', '')))
+            end = date_type.fromisoformat(str(data.get('endDate', '')))
+        except (ValueError, TypeError):
+            raise InvalidError('startDate and endDate are required (YYYY-MM-DD).')
+
+        notice_days = data.get('noticeDays')
+        if notice_days is not None and notice_days != '':
+            try:
+                notice_days = int(notice_days)
+            except (TypeError, ValueError):
+                notice_days = None
+        else:
+            notice_days = None
+
+        special_conditions = data.get('specialConditions')
+        if special_conditions is not None and not isinstance(special_conditions, list):
+            special_conditions = [str(special_conditions)]
+
+        terms = generate_terms(
+            template_key,
+            monthly_rent=float(data.get('monthlyRent', 0)),
+            deposit=float(data.get('securityDeposit', 0)),
+            start_date=start,
+            end_date=end,
+            notice_days=notice_days,
+            special_conditions=special_conditions,
+            landlord_name=data.get('landlordName', ''),
+            tenant_name=data.get('tenantName', request.user.name or ''),
+            property_address=data.get('propertyAddress', ''),
+        )
+        return Response(api_success(terms))
+
+
 class AgreementFormDataView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -181,3 +249,95 @@ class ChecklistCategoriesView(APIView):
 
     def get(self, request):
         return Response(api_success(CHECKLIST_CATEGORIES))
+
+
+class PRCATemplateListView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        from documents.services.prca_templates import get_template_list
+
+        return Response(api_success(get_template_list()))
+
+
+class PRCAGenerateTermsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from datetime import date as date_type
+
+        from documents.services.prca_templates import generate_terms
+
+        data = request.data
+        template_key = data.get('templateKey', 'residential_monthly')
+        try:
+            start = date_type.fromisoformat(str(data.get('startDate', '')))
+            end = date_type.fromisoformat(str(data.get('endDate', '')))
+        except (ValueError, TypeError) as exc:
+            raise InvalidError('startDate and endDate are required (YYYY-MM-DD).') from exc
+
+        notice_days = data.get('noticeDays')
+        if notice_days is not None:
+            try:
+                notice_days = int(notice_days)
+            except (TypeError, ValueError) as exc:
+                raise InvalidError('noticeDays must be a number.') from exc
+
+        terms = generate_terms(
+            template_key,
+            monthly_rent=float(data.get('monthlyRent', 0) or 0),
+            deposit=float(data.get('securityDeposit', 0) or 0),
+            start_date=start,
+            end_date=end,
+            notice_days=notice_days,
+            special_conditions=data.get('specialConditions'),
+            landlord_name=data.get('landlordName', ''),
+            tenant_name=data.get('tenantName', request.user.name or ''),
+            property_address=data.get('propertyAddress', ''),
+        )
+        return Response(api_success(terms))
+
+
+class AgreementSignView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        from django.utils import timezone
+
+        agreement = _get_agreement(pk)
+        role = (request.data.get('role') or 'tenant').lower()
+        signature = (request.data.get('signature') or '').strip()
+        signed_name = (request.data.get('signedName') or request.user.name or '').strip()
+        if not signature or len(signature) < 20:
+            raise InvalidError('A drawn signature is required.')
+
+        if role == 'owner':
+            if request.user.role not in (Role.OWNER, Role.ADMIN):
+                raise ForbiddenError('Only owners can apply the landlord signature.')
+            agreement.owner_signature = signature
+            agreement.owner_signed_at = timezone.now()
+            agreement.owner_signed_name = signed_name or 'Owner'
+            agreement.save(
+                update_fields=[
+                    'owner_signature',
+                    'owner_signed_at',
+                    'owner_signed_name',
+                    'updated_at',
+                ],
+            )
+        else:
+            if agreement.user_id != request.user.id and request.user.role != Role.ADMIN:
+                raise ForbiddenError('You can only sign your own agreement as tenant.')
+            agreement.tenant_signature = signature
+            agreement.tenant_signed_at = timezone.now()
+            agreement.tenant_signed_name = signed_name or request.user.name or 'Tenant'
+            agreement.save(
+                update_fields=[
+                    'tenant_signature',
+                    'tenant_signed_at',
+                    'tenant_signed_name',
+                    'updated_at',
+                ],
+            )
+        return Response(api_success(RentalAgreementSerializer(agreement).data))

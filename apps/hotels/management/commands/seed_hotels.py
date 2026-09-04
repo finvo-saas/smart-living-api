@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 
 from accounts.models import Role, User, UserProfile
+from core.seed_catalog import EXTRA_HOTELS
 from hotels.models import DEFAULT_CANCELLATION, DEFAULT_PRICING_RULES, Hotel, Room
 
 
@@ -88,6 +89,8 @@ HOTELS = [
     },
 ]
 
+HOTELS = HOTELS + EXTRA_HOTELS
+
 
 class Command(BaseCommand):
     help = 'Seed sample hotels with rooms'
@@ -100,18 +103,16 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        owner = User.objects.filter(phone='+8801712345678').first()
-        if not owner:
-            owner, _ = User.objects.get_or_create(
-                phone='+8801712345678',
-                defaults={
-                    'name': 'Abdul Karim',
-                    'role': Role.OWNER,
-                    'role_selected': True,
-                    'is_phone_verified': True,
-                },
-            )
-        UserProfile.objects.get_or_create(user=owner)
+        default_owner, _ = User.objects.get_or_create(
+            phone='+8801712345678',
+            defaults={
+                'name': 'Abdul Karim',
+                'role': Role.OWNER,
+                'role_selected': True,
+                'is_phone_verified': True,
+            },
+        )
+        UserProfile.objects.get_or_create(user=default_owner)
 
         if options['flush']:
             Hotel.objects.filter(name__in=[h['name'] for h in HOTELS]).delete()
@@ -123,6 +124,9 @@ class Command(BaseCommand):
         cancellation = dict(DEFAULT_CANCELLATION)
 
         for item in HOTELS:
+            owner_phone = item.get('owner_phone', '+8801712345678')
+            owner = User.objects.filter(phone=owner_phone).first() or default_owner
+            UserProfile.objects.get_or_create(user=owner)
             hotel, _ = Hotel.objects.update_or_create(
                 owner=owner,
                 name=item['name'],

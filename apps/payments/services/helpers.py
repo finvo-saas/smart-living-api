@@ -92,6 +92,13 @@ def complete_transaction(
     bill = txn.bill
     mark_bill_paid(bill)
 
+    try:
+        from documents.services.receipts import issue_rent_receipt_for_transaction
+
+        issue_rent_receipt_for_transaction(txn)
+    except Exception:
+        pass
+
     if create_payout:
         return create_owner_payout(txn=txn, bill=bill, payout_status=payout_status)
     return None

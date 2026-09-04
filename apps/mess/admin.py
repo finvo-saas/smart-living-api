@@ -3,10 +3,15 @@ from django.contrib import admin
 from mess.models import (
     AttendanceRecord,
     DailyMenu,
+    MealOffRequest,
     MealPreference,
     MealTiming,
+    MemberDeposit,
+    MemberMealLog,
+    MemberMonthBill,
     Mess,
     MessExpense,
+    MessMonthClose,
     MessNotice,
     MessNoticeAck,
     MessRule,
@@ -23,7 +28,15 @@ from mess.models import (
 
 @admin.register(Mess)
 class MessAdmin(admin.ModelAdmin):
-    list_display = ('name', 'city', 'owner_name', 'total_seats', 'available_seats', 'is_deleted')
+    list_display = (
+        'name',
+        'city',
+        'owner_name',
+        'total_seats',
+        'available_seats',
+        'listing',
+        'is_deleted',
+    )
     list_filter = ('city', 'gender', 'is_deleted')
     search_fields = ('name', 'owner_name', 'city')
 
@@ -59,3 +72,8 @@ admin.site.register(MessRule)
 admin.site.register(RuleAcceptance)
 admin.site.register(RuleViolation)
 admin.site.register(MessExpense)
+admin.site.register(MemberMealLog)
+admin.site.register(MealOffRequest)
+admin.site.register(MemberDeposit)
+admin.site.register(MessMonthClose)
+admin.site.register(MemberMonthBill)

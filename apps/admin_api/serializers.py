@@ -186,13 +186,43 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
     featureFlags = serializers.JSONField(source='feature_flags')
     smsGateway = serializers.JSONField(source='sms_gateway')
     emailService = serializers.JSONField(source='email_service')
+    heartbeat = serializers.JSONField(required=False)
+    push = serializers.JSONField(required=False)
 
     class Meta:
         model = SystemSettings
         fields = [
             'platformName', 'platformEmail', 'platformPhone', 'commissionRate',
             'subscriptionPlans', 'featureFlags', 'smsGateway', 'emailService',
+            'heartbeat', 'push',
         ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from discovery.services.heartbeat import merge_heartbeat_config
+        from messaging.services.push import merge_push_config
+
+        data['heartbeat'] = merge_heartbeat_config(instance.heartbeat or {})
+        data['push'] = merge_push_config(instance.push or {})
+        return data
+
+    def validate_heartbeat(self, value):
+        from discovery.services.heartbeat import merge_heartbeat_config
+
+        if value is None:
+            return merge_heartbeat_config({})
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('heartbeat must be an object.')
+        return merge_heartbeat_config(value)
+
+    def validate_push(self, value):
+        from messaging.services.push import merge_push_config
+
+        if value is None:
+            return merge_push_config({})
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('push must be an object.')
+        return merge_push_config(value)
 
 
 class VerificationRequestSerializer(serializers.ModelSerializer):

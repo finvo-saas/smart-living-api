@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from discovery.services.freshness import freshness_dict
 from hotels.models import (
     DEFAULT_CANCELLATION,
     DEFAULT_PRICING_RULES,
@@ -48,6 +49,18 @@ class HotelSerializer(serializers.ModelSerializer):
     )
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
+    featuredUntil = serializers.DateTimeField(
+        source='featured_until',
+        allow_null=True,
+        read_only=True,
+    )
+    lastConfirmedAt = serializers.DateTimeField(
+        source='last_confirmed_at',
+        allow_null=True,
+        read_only=True,
+    )
+    confirmedHoursAgo = serializers.SerializerMethodField()
+    stale = serializers.SerializerMethodField()
 
     class Meta:
         model = Hotel
@@ -79,6 +92,10 @@ class HotelSerializer(serializers.ModelSerializer):
             'totalReviews',
             'totalRooms',
             'availableRooms',
+            'featuredUntil',
+            'lastConfirmedAt',
+            'confirmedHoursAgo',
+            'stale',
             'cancellationPolicy',
             'pricingRules',
             'advancePaymentPercent',
@@ -100,6 +117,12 @@ class HotelSerializer(serializers.ModelSerializer):
             'createdAt',
             'updatedAt',
         )
+
+    def get_confirmedHoursAgo(self, obj):
+        return freshness_dict(obj)['confirmedHoursAgo']
+
+    def get_stale(self, obj):
+        return freshness_dict(obj)['stale']
 
 
 class HotelRegistrationSerializer(serializers.Serializer):
@@ -201,6 +224,18 @@ class RoomSerializer(serializers.ModelSerializer):
 class RoomWriteSerializer(serializers.ModelSerializer):
     roomNumber = serializers.CharField(source='room_number')
     basePrice = serializers.DecimalField(source='base_price', max_digits=12, decimal_places=2)
+    amenities = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list,
+    )
+    images = serializers.ListField(
+        child=serializers.URLField(),
+        required=False,
+        default=list,
+    )
+    description = serializers.CharField(required=False, allow_blank=True, default='')
+    available = serializers.BooleanField(required=False, default=True)
 
     class Meta:
         model = Room

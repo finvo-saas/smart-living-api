@@ -551,9 +551,23 @@ class AdminPropertyModerationDetailView(APIView):
                 'oldValue': old_verified,
                 'newValue': prop.verified,
             })
+        for flag, attr in (
+            ('addressVerified', 'address_verified'),
+            ('photosVerified', 'photos_verified'),
+            ('rentVerified', 'rent_verified'),
+        ):
+            if flag in data:
+                old = getattr(prop, attr)
+                setattr(prop, attr, bool(data[flag]))
+                update_fields.append(attr)
+                changes.append({
+                    'field': flag,
+                    'oldValue': old,
+                    'newValue': getattr(prop, attr),
+                })
         if update_fields:
             update_fields.append('updated_at')
-            prop.save(update_fields=update_fields)
+            prop.save(update_fields=list(dict.fromkeys(update_fields)))
 
         if changes:
             rollback_fields = {
@@ -709,6 +723,10 @@ class AdminSettingsView(APIView):
         settings_obj.feature_flags = validated['feature_flags']
         settings_obj.sms_gateway = validated['sms_gateway']
         settings_obj.email_service = validated['email_service']
+        if 'heartbeat' in validated:
+            settings_obj.heartbeat = validated['heartbeat']
+        if 'push' in validated:
+            settings_obj.push = validated['push']
         settings_obj.save()
         return Response(api_success(SystemSettingsSerializer(settings_obj).data))
 
@@ -772,3 +790,74 @@ class AdminAuditLogRollbackView(APIView):
         log = rollback_audit(log, request.user, request=request)
         from audit.serializers import AuditLogSerializer
         return Response(api_success(AuditLogSerializer(log).data))
+
+
+class AdminHeartbeatView(APIView):
+    permission_classes = [IsAuthenticated, IsPlatformAdmin]
+    admin_permission = 'settings.manage'
+
+    def get(self, request):
+        from discovery.services.heartbeat import get_heartbeat_config, heartbeat_stats
+
+        return Response(
+            api_success(
+                {
+                    'stats': heartbeat_stats(),
+                    'config': get_heartbeat_config(),
+                },
+            ),
+        )
+
+    def post(self, request):
+        from discovery.services.heartbeat import run_heartbeat_batch
+
+        send = request.data.get('sendSms')
+        send_override = None if send is None else bool(send)
+        result = run_heartbeat_batch(force=True, send_sms_override=send_override)
+        return Response(api_success(result))
+
+
+class AdminHeartbeatPingsView(APIView):
+    permission_classes = [IsAuthenticated, IsPlatformAdmin]
+    admin_permission = 'settings.manage'
+
+    def get(self, request):
+        from discovery.models import HeartbeatPing
+
+        qs = HeartbeatPing.objects.select_related('owner').order_by('-created_at')
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        rows = []
+        for ping in qs[:100]:
+            rows.append(
+                {
+                    'id': str(ping.id),
+                    'token': ping.token,
+                    'ownerPhone': ping.owner.phone,
+                    'ownerName': ping.owner.name,
+                    'targetType': ping.target_type,
+                    'targetName': ping.target_name,
+                    'city': ping.target_city,
+                    'status': ping.status,
+                    'dryRun': ping.dry_run,
+                    'sentAt': ping.sent_at.isoformat() if ping.sent_at else None,
+                    'respondedAt': (
+                        ping.responded_at.isoformat() if ping.responded_at else None
+                    ),
+                    'expiresAt': ping.expires_at.isoformat(),
+                    'linkPath': f'/c/{ping.token}',
+                    'error': ping.error_message,
+                },
+            )
+        return Response(api_success(rows))
+
+
+class AdminPushView(APIView):
+    permission_classes = [IsAuthenticated, IsPlatformAdmin]
+    admin_permission = 'settings.manage'
+
+    def get(self, request):
+        from messaging.services.push import push_stats
+
+        return Response(api_success(push_stats()))

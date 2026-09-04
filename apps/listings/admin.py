@@ -19,6 +19,7 @@ class PropertyAdmin(admin.ModelAdmin):
         'published',
         'listing_status',
         'featured',
+        'open_seats',
         'owner',
     )
     list_filter = ('type', 'city', 'published', 'listing_status', 'featured', 'verified')
@@ -28,6 +29,13 @@ class PropertyAdmin(admin.ModelAdmin):
 
 @admin.register(PropertyReview)
 class PropertyReviewAdmin(admin.ModelAdmin):
-    list_display = ('property', 'user', 'rating', 'created_at')
+    list_display = (
+        'property',
+        'user',
+        'rating',
+        'cleanliness',
+        'security',
+        'created_at',
+    )
     list_filter = ('rating',)
     search_fields = ('property__name', 'user__phone', 'comment')
