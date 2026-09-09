@@ -60,6 +60,66 @@ class AreaSeoDetailView(APIView):
         )
 
 
+class SitemapDataView(APIView):
+    """Public inventory the frontend turns into sitemap.xml entries."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    # Sitemaps cap at 50k URLs; stay well inside that per entity type.
+    MAX_PER_TYPE = 5000
+
+    @staticmethod
+    def _rows(qs, fields):
+        return [
+            {
+                'id': str(row['id']),
+                'name': row.get('name') or '',
+                'city': row.get('city') or '',
+                'area': row.get('area') or '',
+                'updatedAt': row['updated_at'].isoformat() if row.get('updated_at') else None,
+            }
+            for row in qs.values(*fields)
+        ]
+
+    def get(self, request):
+        from hotels.models import Hotel
+        from listings.models import ListingStatus, Property
+        from mess.models import Mess
+
+        limit = self.MAX_PER_TYPE
+
+        listings = Property.objects.filter(
+            published=True,
+            listing_status=ListingStatus.PUBLISHED,
+            flagged_unavailable_at__isnull=True,
+        ).order_by('-updated_at')[:limit]
+        hotels = Hotel.objects.filter(is_deleted=False).order_by('-updated_at')[:limit]
+        messes = Mess.objects.filter(
+            is_deleted=False,
+            flagged_unavailable_at__isnull=True,
+        ).order_by('-updated_at')[:limit]
+
+        return Response(
+            api_success(
+                {
+                    'listings': self._rows(
+                        listings,
+                        ('id', 'name', 'city', 'area', 'updated_at'),
+                    ),
+                    'hotels': self._rows(
+                        hotels,
+                        ('id', 'name', 'city', 'area', 'updated_at'),
+                    ),
+                    'messes': self._rows(
+                        messes,
+                        ('id', 'name', 'city', 'updated_at'),
+                    ),
+                },
+            ),
+        )
+
+
 class GeocodeView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []

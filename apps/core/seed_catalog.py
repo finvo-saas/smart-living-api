@@ -2,8 +2,11 @@
 
 Keep demo phones stable so existing docs and OTP logins still work:
   Admins   +8801711111111 / 1722222222 / 1733333333
-  Owner    +8801712345678  Abdul Karim
-  Renter   +8801710000001  Rahim Uddin
+  Mess owner (catalog)     +8801712345678  Abdul Karim
+  Mess owner (product map) +8801917161352  Abdul Karim  ← fix_phone_users
+  Apartment owner          +8801712345680  Karim Hossain
+  Hotel owner              +8801512345678  Tanvir Hasan
+  Renter                   +8801710000001  Rahim Uddin
 """
 
 from accounts.models import Role, User, UserProfile
@@ -28,43 +31,43 @@ OWNERS = [
     {
         'phone': '+8801712345678',
         'name': 'Abdul Karim',
-        'email': 'abdul.karim@smartliving.bd',
+        'email': 'abdul.karim@smartbasa.com',
         'locale': 'bn',
     },
     {
         'phone': '+8801712345679',
         'name': 'Fatima Begum',
-        'email': 'fatima.begum@smartliving.bd',
+        'email': 'fatima.begum@smartbasa.com',
         'locale': 'bn',
     },
     {
         'phone': '+8801712345681',
         'name': 'Shahidul Islam',
-        'email': 'shahidul.islam@smartliving.bd',
+        'email': 'shahidul.islam@smartbasa.com',
         'locale': 'bn',
     },
     {
         'phone': '+8801812345678',
         'name': 'Nusrat Jahan',
-        'email': 'nusrat.jahan@smartliving.bd',
+        'email': 'nusrat.jahan@smartbasa.com',
         'locale': 'bn',
     },
     {
         'phone': '+8801912345678',
         'name': 'Rafiq Ahmed',
-        'email': 'rafiq.ahmed@smartliving.bd',
+        'email': 'rafiq.ahmed@smartbasa.com',
         'locale': 'bn',
     },
     {
         'phone': '+8801612345678',
         'name': 'Mahmuda Akter',
-        'email': 'mahmuda.akter@smartliving.bd',
+        'email': 'mahmuda.akter@smartbasa.com',
         'locale': 'bn',
     },
     {
         'phone': '+8801512345678',
         'name': 'Tanvir Hasan',
-        'email': 'tanvir.hasan@smartliving.bd',
+        'email': 'tanvir.hasan@smartbasa.com',
         'locale': 'en',
     },
 ]
@@ -74,7 +77,7 @@ OWNERS.append(
     {
         'phone': '+8801712345680',
         'name': 'Karim Hossain',
-        'email': 'karim.hossain@smartliving.bd',
+        'email': 'karim.hossain@smartbasa.com',
         'locale': 'bn',
     },
 )
@@ -180,6 +183,8 @@ def ensure_user(*, phone: str, name: str, role: str, email: str = '', locale: st
         'is_phone_verified': True,
         'locale': locale,
         'is_active': True,
+        # Demo accounts use the same number for calls and WhatsApp.
+        'whatsapp_number': extra.get('whatsapp_number', phone),
     }
     user, created = User.objects.get_or_create(phone=phone, defaults=defaults)
     updates = []
@@ -187,6 +192,9 @@ def ensure_user(*, phone: str, name: str, role: str, email: str = '', locale: st
         if not user.name:
             user.name = name
             updates.append('name')
+        if not user.whatsapp_number:
+            user.whatsapp_number = extra.get('whatsapp_number', phone)
+            updates.append('whatsapp_number')
         if email and not user.email:
             user.email = email
             updates.append('email')
@@ -644,7 +652,7 @@ EXTRA_HOTELS = [
         ],
     },
     {
-        'owner_phone': '+8801712345678',
+        'owner_phone': '+8801912345678',
         'name': 'Hotel 71 Motijheel',
         'type': 'hotel',
         'star_rating': 3,

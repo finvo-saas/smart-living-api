@@ -16,9 +16,13 @@ from mess.models import (
     MessNoticeAck,
     MessRule,
     MessStudent,
+    OwnerSMSAccount,
     RuleAcceptance,
     RuleViolation,
     Seat,
+    SMSCreditLedger,
+    SMSCreditPackage,
+    SMSCreditPurchase,
     SMSGroup,
     SMSMessage,
     SMSTemplate,
@@ -49,8 +53,23 @@ class SeatAdmin(admin.ModelAdmin):
 
 @admin.register(MessStudent)
 class MessStudentAdmin(admin.ModelAdmin):
-    list_display = ('name', 'mess', 'seat_number', 'phone', 'is_active')
-    list_filter = ('is_active', 'is_deleted')
+    list_display = (
+        'name',
+        'mess',
+        'occupant_type',
+        'seat_number',
+        'phone',
+        'is_active',
+    )
+    list_filter = ('occupant_type', 'is_active', 'is_deleted')
+    search_fields = (
+        'name',
+        'phone',
+        'whatsapp_number',
+        'university',
+        'organization',
+        'mess__name',
+    )
 
 
 @admin.register(MessNotice)
@@ -67,7 +86,66 @@ admin.site.register(MealPreference)
 admin.site.register(AttendanceRecord)
 admin.site.register(SMSTemplate)
 admin.site.register(SMSGroup)
-admin.site.register(SMSMessage)
+
+
+@admin.register(SMSMessage)
+class SMSMessageAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'mess',
+        'sent_by',
+        'recipient_type',
+        'successful',
+        'failed',
+        'cost',
+        'gateway',
+        'status',
+        'sent_at',
+    )
+    list_filter = ('status', 'gateway', 'recipient_type')
+    search_fields = ('content', 'mess__name', 'sent_by__phone')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(SMSCreditPackage)
+class SMSCreditPackageAdmin(admin.ModelAdmin):
+    list_display = (
+        'package_key',
+        'label',
+        'credits',
+        'price_bdt',
+        'is_active',
+        'sort_order',
+    )
+    list_filter = ('is_active',)
+    search_fields = ('package_key', 'label')
+
+
+@admin.register(OwnerSMSAccount)
+class OwnerSMSAccountAdmin(admin.ModelAdmin):
+    list_display = (
+        'owner',
+        'balance',
+        'lifetime_granted',
+        'lifetime_purchased',
+        'lifetime_used',
+        'free_quota_period',
+    )
+    search_fields = ('owner__phone', 'owner__name')
+
+
+@admin.register(SMSCreditLedger)
+class SMSCreditLedgerAdmin(admin.ModelAdmin):
+    list_display = ('account', 'entry_type', 'credits', 'balance_after', 'created_at')
+    list_filter = ('entry_type',)
+
+
+@admin.register(SMSCreditPurchase)
+class SMSCreditPurchaseAdmin(admin.ModelAdmin):
+    list_display = ('owner', 'package_id', 'credits', 'amount_bdt', 'status', 'paid_at')
+    list_filter = ('status', 'package_id')
+
+
 admin.site.register(MessRule)
 admin.site.register(RuleAcceptance)
 admin.site.register(RuleViolation)

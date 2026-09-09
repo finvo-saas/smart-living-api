@@ -41,10 +41,11 @@ class MyPropertyBookingsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = PropertyBooking.objects.filter(
-            renter=request.user,
-            is_deleted=False,
-        ).order_by('-created_at')
+        qs = (
+            PropertyBooking.objects.filter(renter=request.user, is_deleted=False)
+            .select_related('renter', 'owner')
+            .order_by('-created_at')
+        )
         return Response(api_success(_serialize_many(qs, request)))
 
 
@@ -52,10 +53,11 @@ class OwnerPropertyBookingsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = PropertyBooking.objects.filter(
-            owner=request.user,
-            is_deleted=False,
-        ).order_by('-created_at')
+        qs = (
+            PropertyBooking.objects.filter(owner=request.user, is_deleted=False)
+            .select_related('renter', 'owner')
+            .order_by('-created_at')
+        )
         return Response(api_success(_serialize_many(qs, request)))
 
 
@@ -64,7 +66,10 @@ class PropertyBookingDetailView(APIView):
 
     def get(self, request, pk):
         try:
-            booking = PropertyBooking.objects.get(pk=pk, is_deleted=False)
+            booking = PropertyBooking.objects.select_related('renter', 'owner').get(
+                pk=pk,
+                is_deleted=False,
+            )
         except PropertyBooking.DoesNotExist as exc:
             raise NotFoundError('Booking not found.') from exc
 
@@ -96,8 +101,10 @@ class AdminPropertyBookingsView(APIView):
     def get(self, request):
         from core.paging import paginated_response, query_flag, search_term
 
-        property_qs = PropertyBooking.objects.filter(is_deleted=False).order_by(
-            '-created_at',
+        property_qs = (
+            PropertyBooking.objects.filter(is_deleted=False)
+            .select_related('renter', 'owner')
+            .order_by('-created_at')
         )
         term = search_term(request)
         if term:

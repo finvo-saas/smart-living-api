@@ -15,8 +15,20 @@ class Role(models.TextChoices):
     ADMIN = 'admin', 'Admin'
 
 
+class OwnerVertical(models.TextChoices):
+    MESS = 'mess', 'Mess / Hostel'
+    APARTMENT = 'apartment', 'Apartment / Building'
+    HOTEL = 'hotel', 'Hotel'
+
+
 class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
     phone = models.CharField(max_length=20, unique=True)
+    whatsapp_number = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        help_text='WhatsApp mobile number (E.164). Blank means no WhatsApp contact.',
+    )
     email = models.EmailField(blank=True, default='')
     name = models.CharField(max_length=255, blank=True, default='')
     role = models.CharField(
@@ -50,6 +62,23 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
         default=True,
         help_text='Browser/web-app push notifications when the user has subscribed.',
     )
+    # Owner business focus — hide unused verticals (mess / apartment / hotel)
+    owner_primary_focus = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        choices=OwnerVertical.choices,
+        help_text='Primary business type for dashboard defaults.',
+    )
+    owner_enabled_verticals = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Enabled owner verticals: mess, apartment, hotel.',
+    )
+    owner_focus_selected = models.BooleanField(
+        default=False,
+        help_text='True after the owner completes business-focus onboarding.',
+    )
 
     objects = UserManager()
 
@@ -64,6 +93,16 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
     def __str__(self):
         return self.phone
 
+    def save(self, *args, **kwargs):
+        # Always store E.164 (+8801XXXXXXXXX) — prevents 01… / +880… duplicates
+        from accounts.phone import normalize_bd_phone
+
+        if self.phone:
+            self.phone = normalize_bd_phone(self.phone)
+        if self.whatsapp_number:
+            self.whatsapp_number = normalize_bd_phone(self.whatsapp_number)
+        return super().save(*args, **kwargs)
+
     @property
     def admin_role(self):
         profile = getattr(self, 'admin_profile', None)
@@ -72,6 +111,21 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
     @property
     def has_pin(self) -> bool:
         return self.pin_set_at is not None
+
+    def owner_verticals_list(self) -> list[str]:
+        raw = self.owner_enabled_verticals or []
+        if not isinstance(raw, list):
+            return []
+        allowed = {c.value for c in OwnerVertical}
+        return [str(v) for v in raw if str(v) in allowed]
+
+    def has_owner_vertical(self, vertical: str) -> bool:
+        if self.role != Role.OWNER:
+            return False
+        if not self.owner_focus_selected:
+            # Until they choose, treat as unfocused (UI forces picker).
+            return False
+        return vertical in self.owner_verticals_list()
 
 
 class OTPChallenge(UUIDModel, TimestampedModel):

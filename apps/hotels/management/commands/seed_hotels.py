@@ -54,6 +54,7 @@ HOTELS = [
         'license_number': 'HTL-2024-001',
         'verified': True,
         'featured': True,
+        'owner_phone': '+8801512345678',
         'rooms': [
             {'room_number': '101', 'type': 'double', 'floor': 1, 'capacity': 2, 'base_price': 4500},
             {'room_number': '201', 'type': 'suite', 'floor': 2, 'capacity': 3, 'base_price': 7500},
@@ -82,6 +83,7 @@ HOTELS = [
         'minimum_stay': 1,
         'verified': True,
         'featured': False,
+        'owner_phone': '+8801912345678',
         'rooms': [
             {'room_number': 'A1', 'type': 'double', 'floor': 1, 'capacity': 2, 'base_price': 2200},
             {'room_number': 'A2', 'type': 'family', 'floor': 1, 'capacity': 4, 'base_price': 3200},
@@ -104,9 +106,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         default_owner, _ = User.objects.get_or_create(
-            phone='+8801712345678',
+            phone='+8801512345678',
             defaults={
-                'name': 'Abdul Karim',
+                'name': 'Tanvir Hasan',
                 'role': Role.OWNER,
                 'role_selected': True,
                 'is_phone_verified': True,
@@ -124,7 +126,7 @@ class Command(BaseCommand):
         cancellation = dict(DEFAULT_CANCELLATION)
 
         for item in HOTELS:
-            owner_phone = item.get('owner_phone', '+8801712345678')
+            owner_phone = item.get('owner_phone', '+8801512345678')
             owner = User.objects.filter(phone=owner_phone).first() or default_owner
             UserProfile.objects.get_or_create(user=owner)
             hotel, _ = Hotel.objects.update_or_create(

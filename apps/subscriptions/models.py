@@ -17,6 +17,8 @@ class SubscriptionPlan(UUIDModel, TimestampedModel):
     name = models.CharField(max_length=80)
     price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     max_flats = models.IntegerField(default=3)  # -1 = unlimited
+    max_messes = models.IntegerField(default=1)  # -1 = unlimited
+    max_hotels = models.IntegerField(default=1)  # -1 = unlimited
     features = models.JSONField(default=list)
     highlighted = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
@@ -55,6 +57,18 @@ class OwnerSubscription(UUIDModel, TimestampedModel):
         from portfolio.models import Flat
 
         return Flat.objects.filter(building__owner=self.owner).count()
+
+    @property
+    def messes_used(self) -> int:
+        from mess.models import Mess
+
+        return Mess.objects.filter(owner=self.owner, is_deleted=False).count()
+
+    @property
+    def hotels_used(self) -> int:
+        from hotels.models import Hotel
+
+        return Hotel.objects.filter(owner=self.owner, is_deleted=False).count()
 
 
 class FeaturedBoost(UUIDModel, TimestampedModel):

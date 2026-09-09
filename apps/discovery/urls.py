@@ -18,7 +18,12 @@ from discovery.views import (
 )
 from discovery.views_p1 import AreaCompareView, AreaListView, NearbyPOIView
 from discovery.views_p2 import UniversityDetailView, UniversityListView
-from discovery.views_seo import AreaSeoDetailView, AreaSeoListView, GeocodeView
+from discovery.views_seo import (
+    AreaSeoDetailView,
+    AreaSeoListView,
+    GeocodeView,
+    SitemapDataView,
+)
 
 urlpatterns = [
     path('discover/', DiscoverFeedView.as_view(), name='discover-feed'),
@@ -31,6 +36,7 @@ urlpatterns = [
         AreaCompareView.as_view(),
         name='discover-areas-compare',
     ),
+    path('seo/sitemap/', SitemapDataView.as_view(), name='seo-sitemap'),
     path('areas/seo/', AreaSeoListView.as_view(), name='areas-seo-list'),
     path(
         'areas/seo/<slug:city_slug>/<slug:area_slug>/',

@@ -22,6 +22,7 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
     renterId = serializers.UUIDField(source='renter_id', read_only=True)
     renterName = serializers.CharField(source='renter_name', read_only=True)
     renterPhone = serializers.CharField(source='renter_phone', read_only=True)
+    renterWhatsapp = serializers.SerializerMethodField()
     renterEmail = serializers.CharField(
         source='renter_email',
         read_only=True,
@@ -30,6 +31,7 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
     ownerId = serializers.UUIDField(source='owner_id', read_only=True)
     ownerName = serializers.CharField(source='owner_name', read_only=True)
     ownerPhone = serializers.CharField(source='owner_phone', read_only=True)
+    ownerWhatsapp = serializers.SerializerMethodField()
     bookingMode = serializers.CharField(source='booking_mode', read_only=True)
     moveInDate = serializers.DateField(source='move_in_date', read_only=True, allow_null=True)
     moveOutDate = serializers.DateField(source='move_out_date', read_only=True, allow_null=True)
@@ -58,10 +60,12 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
             'renterId',
             'renterName',
             'renterPhone',
+            'renterWhatsapp',
             'renterEmail',
             'ownerId',
             'ownerName',
             'ownerPhone',
+            'ownerWhatsapp',
             'status',
             'bookingMode',
             'moveInDate',
@@ -82,6 +86,12 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
             'completedAt',
         )
         read_only_fields = fields
+
+    def get_renterWhatsapp(self, obj) -> str:
+        return getattr(obj.renter, 'whatsapp_number', '') or ''
+
+    def get_ownerWhatsapp(self, obj) -> str:
+        return getattr(obj.owner, 'whatsapp_number', '') or ''
 
     def get_rent(self, obj):
         return _money(obj.rent)

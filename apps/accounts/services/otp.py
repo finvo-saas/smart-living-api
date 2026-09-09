@@ -63,8 +63,8 @@ def _otp_message(code: str) -> str:
     brand = (
         getattr(settings, 'OTP_SMS_PREFIX', '')
         or getattr(settings, 'SMS_BRAND_NAME', '')
-        or 'SmartLiving'
-    ).strip() or 'SmartLiving'
+        or 'SmartBasa'
+    ).strip() or 'SmartBasa'
     minutes = OTP_TTL_SECONDS // 60
     return f'{brand}: Your verification code is {code}. Valid for {minutes} minutes.'
 

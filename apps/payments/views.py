@@ -13,7 +13,11 @@ from payments.models import (
     ScheduledPaymentStatus,
 )
 from payments.serializers import (
+    CollectionSettingsSerializer,
+    GatewayCredentialSerializer,
     OwnerPayoutSerializer,
+    PaymentClaimCreateSerializer,
+    PaymentClaimReviewSerializer,
     PaymentScheduleSerializer,
     PaymentTransactionSerializer,
     PayBillSerializer,
@@ -24,9 +28,27 @@ from payments.serializers import (
     ScheduledPaymentWriteSerializer,
 )
 from payments.services.cash import record_cash
+from payments.services.claims import (
+    create_bill_claim,
+    create_mess_claim,
+    list_claims_for_owner,
+    list_claims_for_user,
+    review_claim,
+    serialize_claim,
+)
+from payments.services.collection import (
+    assert_owner,
+    collection_ledger_analytics,
+    collection_report,
+    get_collection_settings,
+    list_gateway_credentials,
+    resolve_payment_instructions,
+    update_collection_settings,
+    upsert_gateway_credential,
+)
 from payments.services.helpers import complete_transaction
 from payments.services.pay import pay_bill
-from payments.services.payouts import owner_analytics, settle_payout
+from payments.services.payouts import settle_payout
 from payments.services.webhooks import process_webhook
 
 
@@ -185,7 +207,7 @@ class OwnerAnalyticsView(APIView):
     def get(self, request):
         if request.user.role not in ('owner', 'admin'):
             raise ForbiddenError('Only owners can view payment analytics.')
-        return Response(api_success(owner_analytics(request.user)))
+        return Response(api_success(collection_ledger_analytics(request.user)))
 
 
 class SettlePayoutView(APIView):
@@ -208,6 +230,144 @@ class TransactionDetailView(APIView):
         except PaymentTransaction.DoesNotExist as exc:
             raise NotFoundError('Payment transaction not found.') from exc
         return Response(api_success(_serialize_txn(txn)))
+
+
+class CollectionSettingsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        assert_owner(request.user)
+        return Response(api_success(get_collection_settings(request.user)))
+
+    def patch(self, request):
+        assert_owner(request.user)
+        ser = CollectionSettingsSerializer(data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        return Response(api_success(update_collection_settings(request.user, ser.validated_data)))
+
+
+class OwnerGatewayCredentialsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        assert_owner(request.user)
+        return Response(api_success(list_gateway_credentials(request.user)))
+
+    def post(self, request):
+        assert_owner(request.user)
+        ser = GatewayCredentialSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        return Response(api_success(upsert_gateway_credential(request.user, ser.validated_data)))
+
+
+class PaymentInstructionsView(APIView):
+    """Tenant-facing payment instructions for a bill or mess."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        bill_id = request.query_params.get('billId')
+        mess_id = request.query_params.get('messId')
+        if bill_id:
+            try:
+                bill = Bill.objects.select_related('owner').get(pk=bill_id, is_deleted=False)
+            except Bill.DoesNotExist as exc:
+                raise NotFoundError('Bill not found.') from exc
+            if (
+                bill.tenant_id != request.user.id
+                and bill.owner_id != request.user.id
+                and request.user.role != 'admin'
+            ):
+                raise ForbiddenError('Access denied.')
+            return Response(
+                api_success(resolve_payment_instructions(owner=bill.owner, mess=None))
+            )
+        if mess_id:
+            from mess.models import Mess
+
+            try:
+                mess = Mess.objects.select_related('owner').get(pk=mess_id, is_deleted=False)
+            except Mess.DoesNotExist as exc:
+                raise NotFoundError('Mess not found.') from exc
+            return Response(
+                api_success(resolve_payment_instructions(owner=mess.owner, mess=mess))
+            )
+        raise InvalidError('billId or messId is required.')
+
+
+class PaymentClaimsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        status_filter = request.query_params.get('status')
+        if request.user.role in ('owner', 'admin') and request.query_params.get('ownerView') == '1':
+            return Response(
+                api_success(list_claims_for_owner(request.user, status=status_filter))
+            )
+        return Response(api_success(list_claims_for_user(request.user)))
+
+    def post(self, request):
+        ser = PaymentClaimCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        if data.get('billId'):
+            claim = create_bill_claim(request.user, data)
+        elif data.get('messId'):
+            claim = create_mess_claim(request.user, data)
+        else:
+            raise InvalidError('billId or messId is required.')
+        return Response(api_success(serialize_claim(claim)))
+
+
+class PaymentClaimReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        assert_owner(request.user)
+        ser = PaymentClaimReviewSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        claim = review_claim(
+            request.user,
+            pk,
+            approve=ser.validated_data['approve'],
+            reason=ser.validated_data.get('reason', ''),
+        )
+        return Response(api_success(serialize_claim(claim)))
+
+
+class CollectionReportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        assert_owner(request.user)
+        year = request.query_params.get('year')
+        month = request.query_params.get('month')
+        try:
+            year_i = int(year) if year else None
+            month_i = int(month) if month else None
+        except (TypeError, ValueError) as exc:
+            raise InvalidError('Invalid year/month.') from exc
+        return Response(
+            api_success(collection_report(request.user, year=year_i, month=month_i))
+        )
+
+
+class OwnerLedgerView(APIView):
+    """Completed receipts for bills owned by this owner (manual ledger)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        assert_owner(request.user)
+        qs = (
+            PaymentTransaction.objects.filter(
+                bill__owner=request.user,
+                status='completed',
+            )
+            .select_related('bill')
+            .order_by('-completed_at', '-created_at')[:300]
+        )
+        return Response(api_success(_serialize_txns(qs)))
 
 
 class BkashWebhookView(APIView):

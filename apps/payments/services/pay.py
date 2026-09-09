@@ -10,8 +10,19 @@ from django.utils import timezone
 from billing.models import Bill, BillStatus
 from core.exceptions import ForbiddenError, InvalidAccountError, InvalidError, NotFoundError
 from payments.gateways.registry import get_gateway
-from payments.models import PaymentMethod, PaymentTransaction, PaymentTransactionStatus
-from payments.services.helpers import complete_transaction
+from payments.models import (
+    CollectionMode,
+    OwnerGatewayCredential,
+    PaymentGateway,
+    PaymentMethod,
+    PaymentTransaction,
+    PaymentTransactionStatus,
+)
+from payments.services.helpers import (
+    complete_transaction,
+    get_or_create_collection_settings,
+    should_create_payout,
+)
 
 
 def _get_bill_for_user(user, bill_id) -> Bill:
@@ -60,9 +71,36 @@ def pay_bill(user, data: dict) -> PaymentTransaction:
     if bill.status == BillStatus.PAID:
         raise InvalidError('Bill is already paid.')
 
+    cfg = get_or_create_collection_settings(bill.owner)
+    # Manual mode: tenants should use “I paid” claims, not platform gateway checkout.
+    if cfg.collection_mode == CollectionMode.MANUAL and not should_create_payout(bill.owner):
+        raise InvalidError(
+            'Owner collects manually. Use “I paid” with your TrxID, or ask the owner '
+            'to enable their merchant gateway.'
+        )
+
     bill_name = data.get('billName') or data.get('bill_name') or f'{bill.month} {bill.year} — {bill.property_name}'
     property_name = data.get('propertyName') or data.get('property_name') or bill.property_name
     tenant_name = data.get('tenantName') or data.get('tenant_name') or bill.tenant_name
+
+    owner_cred = None
+    method_to_gateway = {
+        PaymentMethod.BKASH: PaymentGateway.BKASH,
+        PaymentMethod.NAGAD: PaymentGateway.NAGAD,
+        PaymentMethod.ROCKET: PaymentGateway.ROCKET,
+    }
+    gw_key = method_to_gateway.get(payment_method)
+    if gw_key and cfg.collection_mode == CollectionMode.OWNER_GATEWAY:
+        owner_cred = OwnerGatewayCredential.objects.filter(
+            owner=bill.owner,
+            gateway=gw_key,
+            is_active=True,
+        ).first()
+        if owner_cred is None:
+            raise InvalidError(
+                'Owner has not connected this payment method yet. '
+                'Pay via their wallet number and submit an “I paid” claim.'
+            )
 
     gateway = get_gateway(payment_method)
     placeholder_txn_id = f'PENDING-{uuid.uuid4().hex[:12]}'
@@ -79,17 +117,36 @@ def pay_bill(user, data: dict) -> PaymentTransaction:
         transaction_id=placeholder_txn_id,
         status=PaymentTransactionStatus.PROCESSING,
         idempotency_key=idempotency_key or None,
+        gateway_payload={
+            'ownerGateway': bool(owner_cred),
+            'ownerGatewayId': str(owner_cred.id) if owner_cred else None,
+            'collectionMode': cfg.collection_mode,
+        },
     )
+
+    metadata = {
+        'bill_id': str(bill.id),
+        'user_id': str(user.id),
+        'owner_id': str(bill.owner_id),
+        'collection_mode': cfg.collection_mode,
+    }
+    if owner_cred:
+        metadata['owner_merchant'] = owner_cred.merchant_number
+        metadata['owner_credential_id'] = str(owner_cred.id)
+        # Pass owner secrets into gateway layer (live wire-up uses these later)
+        metadata['owner_credentials'] = owner_cred.credentials or {}
 
     intent = gateway.create_payment(
         amount=amount,
         transaction_id=str(txn.id),
         account_number=account_number,
-        metadata={'bill_id': str(bill.id), 'user_id': str(user.id)},
+        metadata=metadata,
     )
 
+    payload = dict(txn.gateway_payload or {})
+    payload.update(intent.raw or {})
     txn.transaction_id = intent.gateway_txn_id
-    txn.gateway_payload = intent.raw
+    txn.gateway_payload = payload
     txn.status = intent.status
     if intent.status == PaymentTransactionStatus.COMPLETED:
         txn.completed_at = timezone.now()

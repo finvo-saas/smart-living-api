@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from core.exceptions import ForbiddenError, InvalidError, NotFoundError
 from mess.models import (
+    DepositStatus,
     ExpenseCategory,
     MealOffRequest,
     MealOffStatus,
@@ -225,7 +226,18 @@ def _apply_meal_off_to_logs(req: MealOffRequest, user) -> None:
         day = date.fromordinal(day.toordinal() + 1)
 
 
-def add_deposit(mess, student: MessStudent, amount, day: date, note: str, user) -> MemberDeposit:
+def add_deposit(
+    mess,
+    student: MessStudent,
+    amount,
+    day: date,
+    note: str,
+    user,
+    *,
+    payment_method: str = 'Cash',
+    transaction_id: str = '',
+    status: str | None = None,
+) -> MemberDeposit:
     amount = _d(amount)
     if amount <= 0:
         raise InvalidError('Deposit amount must be positive.')
@@ -235,7 +247,11 @@ def add_deposit(mess, student: MessStudent, amount, day: date, note: str, user) 
         amount=amount,
         date=day,
         note=note or '',
+        payment_method=payment_method or 'Cash',
+        transaction_id=transaction_id or '',
+        status=status or DepositStatus.CONFIRMED,
         created_by=user,
+        confirmed_by=user if (status or DepositStatus.CONFIRMED) == DepositStatus.CONFIRMED else None,
     )
 
 
@@ -285,6 +301,7 @@ def preview_month(mess, year: int, month: int) -> dict:
     deposits = MemberDeposit.objects.filter(
         mess=mess,
         is_deleted=False,
+        status=DepositStatus.CONFIRMED,
         date__gte=start,
         date__lte=end,
     )
@@ -349,6 +366,139 @@ def preview_month(mess, year: int, month: int) -> dict:
         ),
         # Live bKash/Nagad settlement intentionally not wired — keep as product TODO (M1).
         'paymentTodo': True,
+    }
+
+
+def member_month_meals(mess, student, year: int, month: int) -> dict:
+    """One member's day-by-day meals for a month — the printable মিল হিসাব sheet.
+
+    Costs mirror preview_month so the sheet and the month rollup never disagree.
+    Reads by student rather than the active roster, so a member who moved out
+    mid-month still gets the days they were served.
+    """
+    start, end = _month_bounds(year, month)
+    logs = {
+        log.date: log
+        for log in MemberMealLog.objects.filter(
+            mess=mess,
+            student=student,
+            date__gte=start,
+            date__lte=end,
+        )
+    }
+
+    summary = preview_month(mess, year, month)
+    row = next(
+        (r for r in summary['members'] if r['studentId'] == str(student.id)),
+        None,
+    )
+    meal_rate = _d(summary['mealRate'])
+    guest_price = _d(mess.guest_meal_price)
+
+    days = []
+    breakfast_total = Decimal('0')
+    lunch_total = Decimal('0')
+    dinner_total = Decimal('0')
+    guest_total = 0
+    days_with_meals = 0
+
+    for offset in range((end - start).days + 1):
+        day = start + timedelta(days=offset)
+        log = logs.get(day)
+        breakfast = _d(log.breakfast) if log else Decimal('0')
+        lunch = _d(log.lunch) if log else Decimal('0')
+        dinner = _d(log.dinner) if log else Decimal('0')
+        gb = int(log.guest_breakfast) if log else 0
+        gl = int(log.guest_lunch) if log else 0
+        gd = int(log.guest_dinner) if log else 0
+        member_total = breakfast + lunch + dinner
+        guests = gb + gl + gd
+
+        breakfast_total += breakfast
+        lunch_total += lunch
+        dinner_total += dinner
+        guest_total += guests
+        if member_total > 0 or guests > 0:
+            days_with_meals += 1
+
+        days.append(
+            {
+                'date': day.isoformat(),
+                'day': day.day,
+                'weekday': day.strftime('%a'),
+                'breakfast': float(breakfast),
+                'lunch': float(lunch),
+                'dinner': float(dinner),
+                'guestBreakfast': gb,
+                'guestLunch': gl,
+                'guestDinner': gd,
+                'memberTotal': float(member_total),
+                'guestTotal': guests,
+                'notes': log.notes if log else '',
+                'logged': log is not None,
+            },
+        )
+
+    meal_count = breakfast_total + lunch_total + dinner_total
+    meal_cost = (meal_count * meal_rate).quantize(TWO, rounding=ROUND_HALF_UP)
+    guest_cost = (Decimal(guest_total) * guest_price).quantize(
+        TWO,
+        rounding=ROUND_HALF_UP,
+    )
+    fixed_share = _d(row['fixedShare']) if row else Decimal('0')
+    deposits = _d(
+        MemberDeposit.objects.filter(
+            mess=mess,
+            student=student,
+            is_deleted=False,
+            status=DepositStatus.CONFIRMED,
+            date__gte=start,
+            date__lte=end,
+        ).aggregate(t=Sum('amount'))['t'],
+    )
+    total = meal_cost + guest_cost + fixed_share
+    net = total - deposits
+
+    return {
+        'messId': str(mess.id),
+        'messName': mess.name,
+        'year': year,
+        'month': month,
+        'monthStart': start.isoformat(),
+        'monthEnd': end.isoformat(),
+        'status': summary['status'],
+        'member': {
+            'studentId': str(student.id),
+            'name': student.name,
+            'phone': student.phone,
+            'seatNumber': student.seat_number or '',
+            'occupantType': student.occupant_type,
+            'isActive': student.is_active,
+        },
+        'days': days,
+        'totals': {
+            'breakfast': float(breakfast_total),
+            'lunch': float(lunch_total),
+            'dinner': float(dinner_total),
+            'memberMeals': float(meal_count),
+            'guestMeals': guest_total,
+            'daysWithMeals': days_with_meals,
+            'daysInMonth': len(days),
+        },
+        'costs': {
+            'mealRate': float(meal_rate),
+            'mealCost': _money(meal_cost),
+            'guestMealPrice': (
+                _money(guest_price) if mess.guest_meal_price is not None else None
+            ),
+            'guestCost': _money(guest_cost),
+            'fixedShare': _money(fixed_share),
+            'deposits': _money(deposits),
+            'total': _money(total),
+            'due': _money(net if net > 0 else Decimal('0')),
+            'credit': _money(-net if net < 0 else Decimal('0')),
+        },
+        'generatedAt': timezone.now().isoformat(),
     }
 
 
@@ -437,5 +587,8 @@ def serialize_deposit(dep: MemberDeposit) -> dict:
         'amount': _money(_d(dep.amount)),
         'date': dep.date.isoformat(),
         'note': dep.note,
+        'paymentMethod': dep.payment_method or 'Cash',
+        'transactionId': dep.transaction_id or '',
+        'status': dep.status,
         'createdAt': dep.created_at.isoformat() if dep.created_at else None,
     }

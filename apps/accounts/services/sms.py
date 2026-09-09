@@ -52,7 +52,7 @@ def _bulksmsbd_sender_id() -> str:
             return value
         if not value.isdigit() and 2 <= len(value) <= 20:
             return value
-    return 'SmartLiving'
+    return 'SmartBasa'
 
 
 def _parse_bulksmsbd_response(raw: str) -> tuple[int | None, str]:

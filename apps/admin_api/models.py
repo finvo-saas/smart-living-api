@@ -193,8 +193,8 @@ class SystemSettings(models.Model):
     """Singleton platform settings row (pk=1)."""
 
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
-    platform_name = models.CharField(max_length=120, default='Smart Living')
-    platform_email = models.EmailField(blank=True, default='support@smartliving.com')
+    platform_name = models.CharField(max_length=120, default='SmartBasa')
+    platform_email = models.EmailField(blank=True, default='support@smartbasa.com')
     platform_phone = models.CharField(max_length=20, blank=True, default='+8801712345678')
     commission_rate = models.FloatField(default=5.0)
     subscription_plans = models.JSONField(default=dict, blank=True)

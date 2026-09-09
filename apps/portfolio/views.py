@@ -339,6 +339,7 @@ class FlatAssignRenterView(APIView):
             status=TenancyStatus.ACTIVE,
             tenant_name=data['name'].strip(),
             tenant_phone=normalize_bd_phone(data['phone']),
+            tenant_whatsapp=data.get('whatsapp') or tenant.whatsapp_number,
             tenant_email=data.get('email', '') or '',
             tenant_nid=data.get('nid', '') or '',
             tenant_address=data.get('address', '') or '',
@@ -354,6 +355,7 @@ class FlatAssignRenterView(APIView):
             'id': str(tenant.id),
             'name': tenancy.tenant_name,
             'phone': tenancy.tenant_phone,
+            'whatsapp': tenancy.tenant_whatsapp or '',
             'email': tenancy.tenant_email or None,
             'nid': tenancy.tenant_nid or None,
             'address': tenancy.tenant_address or None,
@@ -412,6 +414,11 @@ class RenterListView(APIView):
                         'id': tenancy.tenant_id,
                         'name': tenancy.tenant_name or tenancy.tenant.name,
                         'phone': tenancy.tenant_phone or tenancy.tenant.phone,
+                        'whatsapp': (
+                            tenancy.tenant_whatsapp
+                            or tenancy.tenant.whatsapp_number
+                            or ''
+                        ),
                         'email': tenancy.tenant_email or tenancy.tenant.email or '',
                         'nid': tenancy.tenant_nid or '',
                         'address': tenancy.tenant_address or '',

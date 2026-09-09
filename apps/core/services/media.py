@@ -1,7 +1,18 @@
-"""Reusable media storage service.
+"""Reusable media storage service — the only way the app writes files.
 
 Call ``media_storage`` from views and serializers. Do not talk to boto3,
 django-storages, or DigitalOcean/AWS APIs from feature apps.
+
+Every object lands in one bucket under ``STORAGE_ROOT_FOLDER`` with one folder
+per product area, so a caller only picks a ``kind``::
+
+    smart-living-system/
+        property/images/…      property/videos/…
+        mess/photos/…          mess/members/…
+        hotels/photos/…
+        users/profiles/…
+        notices/…              support/complaints/…      chat/attachments/…
+        documents/…            verification/…            (private, signed URLs)
 
 Provider swap (Spaces ↔ AWS S3 ↔ MinIO ↔ local disk) is Django ``STORAGES``
 plus env vars. This service stays the same.
@@ -22,10 +33,19 @@ from core.exceptions import InvalidError
 IMAGE_TYPES = frozenset({'image/jpeg', 'image/png', 'image/webp', 'image/gif'})
 VIDEO_TYPES = frozenset({'video/mp4', 'video/webm', 'video/quicktime'})
 DOCUMENT_TYPES = IMAGE_TYPES | frozenset({'application/pdf'})
+# Chat also carries office files, matching the picker in lib/security/file-upload.
+CHAT_TYPES = DOCUMENT_TYPES | frozenset(
+    {
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain',
+    },
+)
 
+# Limits match the client-side gate in lib/security/file-upload.ts.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_VIDEO_BYTES = 50 * 1024 * 1024
-MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -44,15 +64,55 @@ class StoredMedia:
     private: bool
 
 
-# Keys are stored under ROOT_FOLDER (AWS_LOCATION), e.g. smart-living/listings/...
+# Every key lands under STORAGE_ROOT_FOLDER (Django AWS_LOCATION), one folder
+# per product area, e.g. smart-living-system/mess/members/<uuid>.jpg
 KIND_RULES: dict[str, MediaKind] = {
-    'image': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'listings'),
-    'video': MediaKind(VIDEO_TYPES, MAX_VIDEO_BYTES, 'listings/videos'),
+    # Property / listings
+    'property': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'property/images'),
+    'property_video': MediaKind(VIDEO_TYPES, MAX_VIDEO_BYTES, 'property/videos'),
+    # Mess / hostel
+    'mess': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'mess/photos'),
+    'mess_member': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'mess/members'),
+    # Hotels
+    'hotel': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'hotels/photos'),
+    # People
+    'profile': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'users/profiles'),
+    # Shared product areas
+    'notice': MediaKind(DOCUMENT_TYPES, MAX_DOCUMENT_BYTES, 'notices'),
+    'complaint': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'support/complaints'),
+    'chat': MediaKind(CHAT_TYPES, MAX_DOCUMENT_BYTES, 'chat/attachments'),
+    # Private — served as short-lived signed URLs, never public
     'document': MediaKind(DOCUMENT_TYPES, MAX_DOCUMENT_BYTES, 'documents', True),
-    'profile': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'profiles'),
-    'hotel': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'hotels'),
     'verification': MediaKind(DOCUMENT_TYPES, MAX_DOCUMENT_BYTES, 'verification', True),
 }
+
+# Kind names older clients still send.
+KIND_ALIASES: dict[str, str] = {
+    'image': 'property',
+    'video': 'property_video',
+    'listing': 'property',
+}
+
+# Prefixes written before the per-domain layout; kept so re-saving an old row
+# never relocates an object that is already live in the bucket.
+LEGACY_FOLDERS: tuple[str, ...] = (
+    'listings/videos',
+    'listings',
+    'profiles',
+    'hotels',
+    'documents',
+    'verification',
+)
+
+
+def resolve_kind(kind: str) -> str:
+    """Canonical kind name for a client-supplied value."""
+    normalized = (kind or '').strip().lower()
+    return KIND_ALIASES.get(normalized, normalized)
+
+
+def folder_for(kind: str) -> str:
+    return media_storage.spec(kind).folder
 
 
 class MediaStorageService:
@@ -60,11 +120,10 @@ class MediaStorageService:
 
     def spec(self, kind: str) -> MediaKind:
         try:
-            return KIND_RULES[kind]
+            return KIND_RULES[resolve_kind(kind)]
         except KeyError as exc:
-            raise InvalidError(
-                'Upload kind must be image, video, document, profile, hotel, or verification.',
-            ) from exc
+            allowed = ', '.join(sorted(KIND_RULES))
+            raise InvalidError(f'Upload kind must be one of: {allowed}.') from exc
 
     def backend(self, *, private: bool = False):
         if private and 'private' in getattr(settings, 'STORAGES', {}):
@@ -105,6 +164,28 @@ class MediaStorageService:
             return ''
         return self.absolute_url(self.backend(private=private).url(key), request)
 
+    def signed_url(self, key: str, *, request=None) -> str:
+        """Fresh time-limited URL for a private object.
+
+        Store the key, not the URL — signed URLs expire, so they have to be
+        minted on every read.
+        """
+        return self.url_for(key, private=True, request=request)
+
+    def ensure_key(self, key: str, kind: str) -> str:
+        """Sanity-check a client-supplied storage key before persisting it.
+
+        Keys come back from an upload response, so a caller can only reference
+        an object in the folder that ``kind`` owns.
+        """
+        normalized = (key or '').replace('\\', '/').strip().lstrip('/')
+        if not normalized:
+            return ''
+        folder = self.spec(kind).folder
+        if '..' in normalized or not normalized.startswith(f'{folder}/'):
+            raise InvalidError('That upload reference is not a stored document.')
+        return normalized
+
     def upload(self, file: UploadedFile, kind: str, *, request=None) -> StoredMedia:
         spec = self.validate(file, kind)
         key = self.build_key(kind, file)
@@ -113,7 +194,7 @@ class MediaStorageService:
         return StoredMedia(
             key=saved,
             url=self.absolute_url(backend.url(saved), request),
-            kind=kind,
+            kind=resolve_kind(kind),
             private=spec.private,
         )
 
@@ -134,7 +215,7 @@ class MediaStorageService:
         return StoredMedia(
             key=field_file.name,
             url=self.absolute_url(field_file.url, request),
-            kind=kind,
+            kind=resolve_kind(kind),
             private=spec.private,
         )
 
@@ -145,14 +226,34 @@ class MediaStorageService:
         if backend.exists(key):
             backend.delete(key)
 
+    @property
+    def root_folder(self) -> str:
+        return getattr(settings, 'AWS_LOCATION', '') or ''
+
+    def describe(self) -> dict:
+        """Provider/bucket/folder summary — used by the storage_check command."""
+        return {
+            'provider': getattr(settings, 'STORAGE_PROVIDER', 'local'),
+            'object_storage': bool(getattr(settings, 'USE_OBJECT_STORAGE', False)),
+            'bucket': getattr(settings, 'AWS_STORAGE_BUCKET_NAME', '') or '',
+            'endpoint': getattr(settings, 'AWS_S3_ENDPOINT_URL', '') or '',
+            'public_domain': getattr(settings, 'AWS_S3_CUSTOM_DOMAIN', '') or '',
+            'root_folder': self.root_folder,
+            'folders': {
+                kind: f'{self.root_folder}/{rule.folder}'.lstrip('/')
+                for kind, rule in sorted(KIND_RULES.items())
+            },
+        }
+
 
 media_storage = MediaStorageService()
 
 
 def _preserve_or_build(kind: str, filename: str) -> str:
-    folder = KIND_RULES[kind].folder
+    folder = media_storage.spec(kind).folder
     normalized = (filename or '').replace('\\', '/').lstrip('/')
-    if normalized.startswith(f'{folder}/'):
+    known = (folder, *LEGACY_FOLDERS)
+    if any(normalized.startswith(f'{prefix}/') for prefix in known):
         return normalized
     return media_storage.build_key(kind, filename)
 

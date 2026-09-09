@@ -9,6 +9,8 @@ from accounts.models import (
     UserProfile,
     VerificationDocument,
 )
+from accounts.phone import normalize_bd_phone
+from core.exceptions import InvalidError
 
 
 @admin.register(User)
@@ -18,14 +20,33 @@ class UserAdmin(admin.ModelAdmin):
         'name',
         'role',
         'role_selected',
+        'owner_primary_focus',
+        'owner_focus_selected',
         'is_phone_verified',
         'pin_set_at',
         'is_active',
         'created_at',
     )
-    list_filter = ('role', 'role_selected', 'is_phone_verified', 'is_active')
-    search_fields = ('phone', 'name', 'email')
+    list_filter = (
+        'role',
+        'role_selected',
+        'owner_primary_focus',
+        'owner_focus_selected',
+        'is_phone_verified',
+        'is_active',
+    )
+    search_fields = ('phone', 'whatsapp_number', 'name', 'email')
     ordering = ('-created_at',)
+
+    def save_model(self, request, obj, form, change):
+        if obj.phone:
+            try:
+                obj.phone = normalize_bd_phone(obj.phone)
+            except InvalidError as exc:
+                from django.core.exceptions import ValidationError
+
+                raise ValidationError({'phone': str(exc)}) from exc
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(UserProfile)

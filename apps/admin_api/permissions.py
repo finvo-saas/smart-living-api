@@ -17,6 +17,8 @@ ROLE_PERMISSIONS = {
         'analytics.view',
         'settings.manage',
         'audit.view',
+        'sms.view',
+        'sms.manage',
     },
     'moderator': {
         'dashboard.view',
@@ -31,6 +33,8 @@ ROLE_PERMISSIONS = {
         'fraud.manage',
         'analytics.view',
         'audit.view',
+        'sms.view',
+        'sms.manage',
     },
     'support': {
         'dashboard.view',
@@ -39,6 +43,7 @@ ROLE_PERMISSIONS = {
         'disputes.manage',
         'bookings.view',
         'fraud.manage',
+        'sms.view',
     },
 }
 

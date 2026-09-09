@@ -26,7 +26,7 @@ def send_email(
         return False
 
     provider = (getattr(settings, 'EMAIL_PROVIDER', 'console') or 'console').lower()
-    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@smartliving.local'
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@smartbasa.local'
 
     if provider in ('console', '', 'log'):
         logger.info('EMAIL → %s | %s | %s', recipients, subject, body[:200])

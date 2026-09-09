@@ -16,11 +16,13 @@ from mess.models import (
     DailyMenu,
     DEFAULT_MEAL_TIMING,
     MealTiming,
+    MemberMealLog,
     Mess,
     MessExpense,
     MessNotice,
     MessRule,
     MessStudent,
+    OccupantType,
     Seat,
     SeatStatus,
     SMSGroup,
@@ -28,6 +30,7 @@ from mess.models import (
     WeeklySchedule,
 )
 from mess.services.live_status import DEFAULT_LIVE_STATUS
+from mess.calendar_bd import bangladesh_week_bounds
 
 
 SEED_MESS_NAMES = (
@@ -120,8 +123,9 @@ MESS_SPECS = [
                 'name': 'Mehedi Hasan',
                 'phone': '+8801710000007',
                 'email': 'mehedi.hasan@gmail.com',
-                'student_id_code': 'STU-2024-004',
-                'university': 'CUET',
+                'occupant_type': OccupantType.JOB_HOLDER,
+                'organization': 'Brain Station 23',
+                'designation': 'Software Engineer',
                 'seat_number': 'A-03',
             },
         ],
@@ -255,8 +259,8 @@ MESS_SPECS = [
                 'name': 'Rakib Hasan',
                 'phone': '+8801710000006',
                 'email': 'rakib@example.com',
-                'student_id_code': 'MCM-2024-02',
-                'university': 'BUET',
+                'occupant_type': OccupantType.BUSINESS,
+                'organization': 'Rakib Electronics, New Market',
                 'seat_number': 'A-02',
             },
         ],
@@ -323,8 +327,9 @@ MESS_SPECS = [
                 'name': 'Farhana Akter',
                 'phone': '+8801512345678',
                 'email': 'farhana@example.com',
-                'student_id_code': 'UTM-2024-02',
-                'university': 'BRAC University',
+                'occupant_type': OccupantType.JOB_HOLDER,
+                'organization': 'BRAC Bank, Uttara Branch',
+                'designation': 'Relationship Officer',
                 'seat_number': 'A-02',
             },
         ],
@@ -377,6 +382,7 @@ class Command(BaseCommand):
                 'role': Role.OWNER,
                 'role_selected': True,
                 'is_phone_verified': True,
+                'whatsapp_number': phone,
             },
         )
         if owner.role != Role.OWNER:
@@ -444,9 +450,13 @@ class Command(BaseCommand):
                 defaults={
                     'user': user,
                     'name': stu['name'],
+                    'whatsapp_number': stu.get('whatsapp_number') or stu['phone'],
                     'email': stu.get('email') or '',
+                    'occupant_type': stu.get('occupant_type') or OccupantType.STUDENT,
                     'student_id_code': stu.get('student_id_code') or '',
                     'university': stu.get('university') or '',
+                    'organization': stu.get('organization') or '',
+                    'designation': stu.get('designation') or '',
                     'seat_number': stu['seat_number'],
                     'joined_date': date(2024, 1, 15),
                     'monthly_fee': spec['monthly_fee'],
@@ -512,14 +522,21 @@ class Command(BaseCommand):
             },
         )
 
-        week_start = today - timedelta(days=today.weekday())
-        week_end = week_start + timedelta(days=6)
+        week_start, week_end = bangladesh_week_bounds(today)
         WeeklySchedule.objects.update_or_create(
             mess=mess,
             week_start_date=week_start,
             defaults={
                 'week_end_date': week_end,
                 'schedule': {
+                    'saturday': {
+                        'lunch': [{'id': 'sat-ln', 'name': lunch_name}],
+                        'dinner': [{'id': 'sat-dn', 'name': 'Dal & Rice'}],
+                    },
+                    'sunday': {
+                        'breakfast': [{'id': 'sun-bf', 'name': 'Khichuri'}],
+                        'lunch': [{'id': 'sun-ln', 'name': 'Chicken Curry'}],
+                    },
                     'monday': {
                         'breakfast': [{'id': 'mon-bf', 'name': 'Khichuri'}],
                         'lunch': [{'id': 'mon-ln', 'name': lunch_name}],
@@ -615,6 +632,27 @@ class Command(BaseCommand):
                 'created_by': owner,
             },
         )
+
+        # Day-by-day meals so মিল হিসাব and the member meal sheet have real data
+        for index, student in enumerate(student_objs):
+            for offset in range(today.day):
+                day = today.replace(day=1) + timedelta(days=offset)
+                # Vary the pattern per member/day: some skip breakfast, some
+                # bring an occasional guest.
+                skew = (index + offset) % 5
+                MemberMealLog.objects.update_or_create(
+                    mess=mess,
+                    student=student,
+                    date=day,
+                    defaults={
+                        'breakfast': Decimal('0') if skew == 0 else Decimal('1'),
+                        'lunch': Decimal('1'),
+                        'dinner': Decimal('0') if skew == 4 else Decimal('1'),
+                        'guest_lunch': 1 if skew == 2 and offset % 7 == 0 else 0,
+                        'notes': 'Guest joined lunch' if skew == 2 and offset % 7 == 0 else '',
+                        'marked_by': owner,
+                    },
+                )
 
         MessExpense.objects.get_or_create(
             mess=mess,

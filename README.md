@@ -10,6 +10,19 @@ Django REST API backend for the [Smart Living System](../smart-living-system/) f
 
 Architecture and endpoint map: `smart-living-system/docs/BACKEND_DESIGN.md`
 
+## Production (single VPS)
+
+Full Docker Compose stack (API + Next.js + Postgres + Redis + Celery + Nginx + SSL):
+
+→ see **[`../deploy/README.md`](../deploy/README.md)**
+
+```bash
+cp deploy/env.production.example deploy/.env.production
+# edit secrets
+./deploy/scripts/deploy.sh
+./deploy/scripts/enable-ssl.sh
+```
+
 ## Quick start
 
 ```bash

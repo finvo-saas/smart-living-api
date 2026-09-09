@@ -63,7 +63,7 @@ def vapid_private_key() -> str:
 def vapid_subject() -> str:
     return str(
         getattr(settings, 'VAPID_SUBJECT', '')
-        or 'mailto:support@smartliving.local',
+        or 'mailto:support@smartbasa.local',
     ).strip()
 
 

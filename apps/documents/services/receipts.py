@@ -58,7 +58,7 @@ def issue_rent_receipt_for_transaction(txn) -> dict | None:
                 title='Rent receipt ready',
                 body=f'Your receipt for ৳{float(amount):,.0f} is available in Reports.',
                 url='/reports',
-                email_subject='Rent receipt — Smart Living',
+                email_subject='Rent receipt — SmartBasa',
             )
         except Exception:
             logger.exception('Receipt notify failed')

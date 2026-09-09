@@ -1,4 +1,4 @@
-# Smart Living API — base dependencies (pinned latest stable as of 2026-07)
+# SmartBasa API — base dependencies (pinned latest stable as of 2026-07)
 Django==5.2.15
 djangorestframework==3.17.1
 djangorestframework-simplejwt==5.5.0

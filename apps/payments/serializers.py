@@ -92,6 +92,46 @@ class RecordCashSerializer(serializers.Serializer):
     receivedBy = serializers.CharField(required=False, allow_blank=True, default='')
     receiptNote = serializers.CharField(required=False, allow_blank=True, default='')
     receiptFileName = serializers.CharField(required=False, allow_blank=True, default='')
+    paymentMethod = serializers.CharField(required=False, allow_blank=True, default='Cash')
+    transactionId = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class CollectionSettingsSerializer(serializers.Serializer):
+    collectionMode = serializers.CharField(required=False)
+    platformCollectEnabled = serializers.BooleanField(required=False)
+    instructions = serializers.DictField(required=False)
+    bkashNumber = serializers.CharField(required=False, allow_blank=True)
+    nagadNumber = serializers.CharField(required=False, allow_blank=True)
+    rocketNumber = serializers.CharField(required=False, allow_blank=True)
+    bankName = serializers.CharField(required=False, allow_blank=True)
+    bankAccountNumber = serializers.CharField(required=False, allow_blank=True)
+    bankAccountName = serializers.CharField(required=False, allow_blank=True)
+    paymentNote = serializers.CharField(required=False, allow_blank=True)
+
+
+class GatewayCredentialSerializer(serializers.Serializer):
+    gateway = serializers.CharField()
+    displayName = serializers.CharField(required=False, allow_blank=True, default='')
+    merchantNumber = serializers.CharField(required=False, allow_blank=True, default='')
+    credentials = serializers.DictField(required=False)
+    isActive = serializers.BooleanField(required=False, default=True)
+    isSandbox = serializers.BooleanField(required=False, default=True)
+
+
+class PaymentClaimCreateSerializer(serializers.Serializer):
+    billId = serializers.UUIDField(required=False)
+    messId = serializers.UUIDField(required=False)
+    studentId = serializers.UUIDField(required=False)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    paymentMethod = serializers.CharField()
+    transactionId = serializers.CharField(required=False, allow_blank=True, default='')
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+    date = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class PaymentClaimReviewSerializer(serializers.Serializer):
+    approve = serializers.BooleanField()
+    reason = serializers.CharField(required=False, allow_blank=True, default='')
 
 
 class OwnerPayoutSerializer(serializers.ModelSerializer):

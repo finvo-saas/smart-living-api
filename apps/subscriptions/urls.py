@@ -8,6 +8,7 @@ from subscriptions.views import (
     FeaturedBoostView,
     FlatLimitStatusView,
     OwnerSubscriptionView,
+    OwnerUsageStatusView,
     SubscriptionPlansView,
     UpgradeSubscriptionView,
 )
@@ -23,6 +24,11 @@ urlpatterns = [
         'subscriptions/flat-limit/',
         FlatLimitStatusView.as_view(),
         name='subscription-flat-limit',
+    ),
+    path(
+        'subscriptions/usage/',
+        OwnerUsageStatusView.as_view(),
+        name='subscription-usage',
     ),
     path(
         'subscriptions/upgrade/',

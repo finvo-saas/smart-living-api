@@ -146,6 +146,7 @@ class Command(BaseCommand):
                     'start_date': date(2025, 6, 1),
                     'tenant_name': tenant.name,
                     'tenant_phone': tenant.phone,
+                    'tenant_whatsapp': tenant.whatsapp_number or tenant.phone,
                     'tenant_email': tenant.email,
                     'tenant_nid': f'19{tenant.phone[-10:]}',
                     'tenant_address': f'{building.address}',

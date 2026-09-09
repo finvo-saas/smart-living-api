@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from accounts.fields import WhatsAppNumberField
 from portfolio.models import Building, Flat, FlatStatus, Floor, Tenancy, TenancyStatus
 
 
@@ -21,6 +22,7 @@ class RenterSerializer(serializers.Serializer):
     id = serializers.UUIDField(read_only=True)
     name = serializers.CharField()
     phone = serializers.CharField()
+    whatsapp = serializers.CharField(required=False, allow_blank=True)
     email = serializers.CharField(required=False, allow_blank=True)
     nid = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
@@ -44,6 +46,7 @@ def _renter_from_tenancy(tenancy: Tenancy | None) -> dict | None:
         'id': str(tenant.id),
         'name': tenancy.tenant_name or tenant.name or f'User {tenant.phone[-4:]}',
         'phone': tenancy.tenant_phone or tenant.phone,
+        'whatsapp': tenancy.tenant_whatsapp or tenant.whatsapp_number or '',
         'email': tenancy.tenant_email or tenant.email or None,
         'nid': tenancy.tenant_nid or None,
         'address': tenancy.tenant_address or None,
@@ -255,6 +258,7 @@ class FloorPatchSerializer(serializers.ModelSerializer):
 class AssignRenterSerializer(serializers.Serializer):
     name = serializers.CharField()
     phone = serializers.CharField()
+    whatsapp = WhatsAppNumberField()
     email = serializers.EmailField(required=False, allow_blank=True)
     nid = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)

@@ -1,7 +1,10 @@
 from django.contrib import admin
 
 from payments.models import (
+    OwnerCollectionSettings,
+    OwnerGatewayCredential,
     OwnerPayout,
+    PaymentClaim,
     PaymentSchedule,
     PaymentTransaction,
     PaymentWebhookEvent,
@@ -66,3 +69,32 @@ class PaymentWebhookEventAdmin(admin.ModelAdmin):
     list_filter = ('gateway', 'processed')
     search_fields = ('gateway_event_id',)
     readonly_fields = ('raw_payload', 'created_at', 'updated_at')
+
+
+@admin.register(OwnerCollectionSettings)
+class OwnerCollectionSettingsAdmin(admin.ModelAdmin):
+    list_display = ('owner', 'collection_mode', 'platform_collect_enabled', 'bkash_number')
+    list_filter = ('collection_mode', 'platform_collect_enabled')
+    search_fields = ('owner__phone', 'bkash_number', 'nagad_number')
+
+
+@admin.register(OwnerGatewayCredential)
+class OwnerGatewayCredentialAdmin(admin.ModelAdmin):
+    list_display = ('owner', 'gateway', 'merchant_number', 'is_active', 'is_sandbox')
+    list_filter = ('gateway', 'is_active', 'is_sandbox')
+    search_fields = ('owner__phone', 'merchant_number')
+    readonly_fields = ('credentials',)
+
+
+@admin.register(PaymentClaim)
+class PaymentClaimAdmin(admin.ModelAdmin):
+    list_display = (
+        'amount',
+        'payment_method',
+        'status',
+        'claimed_by',
+        'transaction_id',
+        'created_at',
+    )
+    list_filter = ('status', 'payment_method')
+    search_fields = ('transaction_id', 'claimed_by__phone')

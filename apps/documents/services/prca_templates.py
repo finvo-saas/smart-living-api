@@ -239,7 +239,7 @@ def generate_terms(
         'rentIncreaseRules': rent_increase_rules(monthly_rent),
         'receiptObligation': (
             'Landlord must issue a written rent receipt for every payment '
-            '(PRCA 1991 Section 23). Smart Living auto-issues a digital receipt '
+            '(PRCA 1991 Section 23). SmartBasa auto-issues a digital receipt '
             'when rent is paid through the platform.'
         ),
     }

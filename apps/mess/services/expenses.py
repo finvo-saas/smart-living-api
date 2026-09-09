@@ -9,7 +9,25 @@ from datetime import date
 from django.db.models import Sum
 from django.utils import timezone
 
+from core.exceptions import InvalidError
 from mess.models import ExpenseCategory, Mess, MessExpense
+
+
+MONTH_BY_PREFIX = {
+    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+}
+
+
+def parse_month(raw, default: int) -> int:
+    """Accept 9, '09' or 'September' — clients send both numbers and names."""
+    if raw in (None, ''):
+        return default
+    text = str(raw).strip()
+    value = int(text) if text.isdigit() else MONTH_BY_PREFIX.get(text[:3].lower(), 0)
+    if not 1 <= value <= 12:
+        raise InvalidError('month must be 1–12 or a month name.')
+    return value
 
 
 def monthly_expense_summary(mess: Mess, month: int, year: int) -> dict:

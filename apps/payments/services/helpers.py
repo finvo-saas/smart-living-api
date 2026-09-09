@@ -4,10 +4,13 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django.conf import settings
+from django.db.models import Sum
 from django.utils import timezone
 
 from billing.models import Bill, BillStatus
 from payments.models import (
+    CollectionMode,
+    OwnerCollectionSettings,
     OwnerPayout,
     PaymentMethod,
     PaymentTransaction,
@@ -28,12 +31,71 @@ def calc_commission(gross: Decimal) -> tuple[Decimal, Decimal, Decimal]:
     return rate_pct, commission_amount, net_amount
 
 
-def mark_bill_paid(bill: Bill | None) -> None:
-    if bill is None or bill.status == BillStatus.PAID:
+def get_or_create_collection_settings(owner) -> OwnerCollectionSettings:
+    settings_obj, _ = OwnerCollectionSettings.objects.get_or_create(owner=owner)
+    return settings_obj
+
+
+def should_create_payout(owner) -> bool:
+    """Platform payout/commission only for opt-in managed collect."""
+    if owner is None:
+        return False
+    cfg = getattr(owner, 'collection_settings', None)
+    if cfg is None:
+        try:
+            cfg = OwnerCollectionSettings.objects.filter(owner=owner).first()
+        except Exception:
+            return False
+    if cfg is None:
+        return False
+    return (
+        cfg.collection_mode == CollectionMode.PLATFORM_COLLECT
+        and cfg.platform_collect_enabled
+    )
+
+
+def bill_paid_total(bill: Bill) -> Decimal:
+    total = (
+        PaymentTransaction.objects.filter(
+            bill=bill,
+            status=PaymentTransactionStatus.COMPLETED,
+        ).aggregate(t=Sum('amount'))['t']
+        or Decimal('0')
+    )
+    return Decimal(str(total))
+
+
+def sync_bill_payment_state(bill: Bill | None) -> None:
+    """Update amount_paid / status from completed ledger transactions."""
+    if bill is None:
         return
+    paid = bill_paid_total(bill)
+    bill.amount_paid = paid
+    fields = ['amount_paid', 'updated_at']
+    if paid >= bill.amount and bill.amount > 0:
+        if bill.status != BillStatus.PAID:
+            bill.status = BillStatus.PAID
+            bill.paid_date = timezone.now().date()
+            fields.extend(['status', 'paid_date'])
+    elif paid > 0 and bill.status == BillStatus.PAID:
+        # Partial after previous full mark — reopen as unpaid
+        bill.status = BillStatus.UNPAID
+        bill.paid_date = None
+        fields.extend(['status', 'paid_date'])
+    bill.save(update_fields=fields)
+
+
+def mark_bill_paid(bill: Bill | None) -> None:
+    if bill is None:
+        return
+    sync_bill_payment_state(bill)
+    if bill.status == BillStatus.PAID:
+        return
+    # Force-complete when caller intends full settlement without partial math
     bill.status = BillStatus.PAID
     bill.paid_date = timezone.now().date()
-    bill.save(update_fields=['status', 'paid_date', 'updated_at'])
+    bill.amount_paid = bill.amount
+    bill.save(update_fields=['status', 'paid_date', 'amount_paid', 'updated_at'])
 
 
 def create_owner_payout(
@@ -43,6 +105,8 @@ def create_owner_payout(
     payout_status: str | None = None,
 ) -> OwnerPayout | None:
     if bill is None:
+        return None
+    if not should_create_payout(bill.owner):
         return None
 
     existing = OwnerPayout.objects.filter(payment_transaction=txn).first()
@@ -79,8 +143,9 @@ def create_owner_payout(
 def complete_transaction(
     txn: PaymentTransaction,
     *,
-    create_payout: bool = True,
+    create_payout: bool | None = None,
     payout_status: str | None = None,
+    force_mark_bill_paid: bool = False,
 ) -> OwnerPayout | None:
     if txn.status == PaymentTransactionStatus.COMPLETED:
         return OwnerPayout.objects.filter(payment_transaction=txn).first()
@@ -90,7 +155,10 @@ def complete_transaction(
     txn.save(update_fields=['status', 'completed_at', 'updated_at'])
 
     bill = txn.bill
-    mark_bill_paid(bill)
+    if force_mark_bill_paid:
+        mark_bill_paid(bill)
+    else:
+        sync_bill_payment_state(bill)
 
     try:
         from documents.services.receipts import issue_rent_receipt_for_transaction
@@ -98,6 +166,9 @@ def complete_transaction(
         issue_rent_receipt_for_transaction(txn)
     except Exception:
         pass
+
+    if create_payout is None:
+        create_payout = should_create_payout(bill.owner) if bill else False
 
     if create_payout:
         return create_owner_payout(txn=txn, bill=bill, payout_status=payout_status)

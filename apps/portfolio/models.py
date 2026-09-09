@@ -146,6 +146,12 @@ class Tenancy(UUIDModel, TimestampedModel):
     # Snapshot fields for UI Renter embed when tenant has incomplete profile
     tenant_name = models.CharField(max_length=255, blank=True, default='')
     tenant_phone = models.CharField(max_length=20, blank=True, default='')
+    tenant_whatsapp = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        help_text='WhatsApp number for owner-to-renter messaging.',
+    )
     tenant_email = models.EmailField(blank=True, default='')
     tenant_nid = models.CharField(max_length=40, blank=True, default='')
     tenant_address = models.CharField(max_length=500, blank=True, default='')

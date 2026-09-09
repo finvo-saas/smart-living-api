@@ -157,6 +157,7 @@ class BillSerializer(serializers.ModelSerializer):
     seatNumber = serializers.CharField(source='seat_number', allow_blank=True)
     dueDate = serializers.DateField(source='due_date', format='%Y-%m-%d')
     paidDate = serializers.SerializerMethodField()
+    amountPaid = serializers.SerializerMethodField()
     items = BillItemSerializer(many=True, read_only=True)
     createdAt = serializers.SerializerMethodField()
     templateId = serializers.SerializerMethodField()
@@ -176,6 +177,7 @@ class BillSerializer(serializers.ModelSerializer):
             'month',
             'year',
             'amount',
+            'amountPaid',
             'dueDate',
             'paidDate',
             'status',
@@ -191,6 +193,9 @@ class BillSerializer(serializers.ModelSerializer):
         if obj.tenant_id:
             return str(obj.tenant_id)
         return ''
+
+    def get_amountPaid(self, obj):
+        return _money(obj.amount_paid)
 
     def get_paidDate(self, obj):
         return _date_str(obj.paid_date) if obj.paid_date else None

@@ -65,6 +65,12 @@ class Bill(UUIDModel, TimestampedModel):
     month = models.CharField(max_length=20)
     year = models.PositiveIntegerField()
     amount = models.DecimalField(max_digits=12, decimal_places=2)
+    amount_paid = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text='Sum of confirmed ledger receipts (supports partial payments).',
+    )
     due_date = models.DateField()
     paid_date = models.DateField(null=True, blank=True)
     status = models.CharField(

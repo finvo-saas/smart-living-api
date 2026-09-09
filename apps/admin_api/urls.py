@@ -23,6 +23,15 @@ from admin_api.views import (
     AdminVerificationDetailView,
     AdminVerificationsView,
 )
+from admin_api.views_sms import (
+    AdminSMSMessageListView,
+    AdminSMSOverviewView,
+    AdminSMSPackageDetailView,
+    AdminSMSPackageListCreateView,
+    AdminSMSWalletAdjustView,
+    AdminSMSWalletDetailView,
+    AdminSMSWalletListView,
+)
 
 urlpatterns = [
     path('admin/dashboard/', AdminDashboardView.as_view(), name='admin-dashboard'),
@@ -77,5 +86,32 @@ urlpatterns = [
         'admin/audit-logs/<uuid:pk>/rollback/',
         AdminAuditLogRollbackView.as_view(),
         name='admin-audit-log-rollback',
+    ),
+    path('admin/sms/overview/', AdminSMSOverviewView.as_view(), name='admin-sms-overview'),
+    path(
+        'admin/sms/packages/',
+        AdminSMSPackageListCreateView.as_view(),
+        name='admin-sms-packages',
+    ),
+    path(
+        'admin/sms/packages/<uuid:pk>/',
+        AdminSMSPackageDetailView.as_view(),
+        name='admin-sms-package-detail',
+    ),
+    path('admin/sms/wallets/', AdminSMSWalletListView.as_view(), name='admin-sms-wallets'),
+    path(
+        'admin/sms/wallets/<uuid:owner_id>/',
+        AdminSMSWalletDetailView.as_view(),
+        name='admin-sms-wallet-detail',
+    ),
+    path(
+        'admin/sms/wallets/<uuid:owner_id>/adjust/',
+        AdminSMSWalletAdjustView.as_view(),
+        name='admin-sms-wallet-adjust',
+    ),
+    path(
+        'admin/sms/messages/',
+        AdminSMSMessageListView.as_view(),
+        name='admin-sms-messages',
     ),
 ]

@@ -6,8 +6,10 @@ __pycache__/
 .Python
 venv/
 .venv/
-# env/
-# .env
+env/
+.env
+.env.*
+!.env.example
 *.egg-info/
 dist/
 build/

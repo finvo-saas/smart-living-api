@@ -125,7 +125,7 @@ out body 80;
         req = urllib.request.Request(
             url,
             data=body,
-            headers={'User-Agent': 'SmartLivingSystem/1.0 (poi-overlay)'},
+            headers={'User-Agent': 'SmartBasa/1.0 (poi-overlay)'},
             method='POST',
         )
         try:

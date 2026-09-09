@@ -36,6 +36,9 @@ class RentalAgreement(UUIDModel, TimestampedModel):
     end_date = models.DateField()
     monthly_rent = models.DecimalField(max_digits=12, decimal_places=2)
     security_deposit = models.DecimalField(max_digits=12, decimal_places=2)
+    # Private uploads keep their storage key; the URL is signed per read.
+    # document_url stays for externally hosted / pasted links.
+    document_key = models.CharField(max_length=512, blank=True, default='')
     document_url = models.URLField(blank=True, default='')
     document_name = models.CharField(max_length=255, blank=True, default='')
     document_size = models.PositiveIntegerField(default=0)
@@ -75,6 +78,7 @@ class AgreementRenewal(UUIDModel, TimestampedModel):
         null=True,
         blank=True,
     )
+    document_key = models.CharField(max_length=512, blank=True, default='')
     document_url = models.URLField(blank=True, default='')
     renewed_by = models.CharField(max_length=255, blank=True, default='')
 

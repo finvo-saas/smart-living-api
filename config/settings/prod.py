@@ -5,6 +5,27 @@ from .base import _env_bool  # noqa: E402
 
 DEBUG = False
 
+# WhiteNoise — serve Django admin / staticfiles behind gunicorn (nginx still fronts the app)
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+    *[m for m in MIDDLEWARE if m != 'django.middleware.security.SecurityMiddleware'],  # noqa: F405
+]
+STORAGES = {
+    **STORAGES,  # noqa: F405
+    'staticfiles': {
+        # Compressed (non-manifest) avoids collectstatic failures on missing hashed refs
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
+    },
+}
+
+# Never auto-complete gateway payments in production unless explicitly allowed
+# for a staging box (ALLOW_PAYMENT_SANDBOX_IN_PROD=true).
+if _env_bool('ALLOW_PAYMENT_SANDBOX_IN_PROD', False):
+    PAYMENT_SANDBOX_AUTO_COMPLETE = _env_bool('PAYMENT_SANDBOX_AUTO_COMPLETE', False)
+else:
+    PAYMENT_SANDBOX_AUTO_COMPLETE = False
+
 # Object storage is configured in base.py via STORAGES (DigitalOcean Spaces).
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -12,6 +33,17 @@ SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# Behind nginx/Contabo TLS terminator you can set SECURE_SSL_REDIRECT=false
+# and let the proxy redirect HTTP→HTTPS.
+SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', True)
+SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '31536000'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', True)
+SECURE_HSTS_PRELOAD = _env_bool('SECURE_HSTS_PRELOAD', False)
+SECURE_REFERRER_POLICY = os.environ.get(
+    'SECURE_REFERRER_POLICY',
+    'same-origin',
+)
 
 # Production defaults — override via env when you want workers/Redis/throttles
 USE_REDIS_CACHE = _env_bool('USE_REDIS_CACHE', True)
@@ -60,5 +92,10 @@ if API_THROTTLING_ENABLED:
         'core.throttling.ConfigurableUserRateThrottle',
     )
 
-if os.environ.get('DJANGO_SECRET_KEY', '').startswith('dev-'):
+_secret = os.environ.get('DJANGO_SECRET_KEY', '')
+if not _secret or _secret.startswith('dev-') or _secret == 'change-me-in-production':
     raise ValueError('Set a strong DJANGO_SECRET_KEY in production')
+if len(_secret) < 50 or len(set(_secret)) < 5:
+    raise ValueError(
+        'DJANGO_SECRET_KEY must be at least 50 characters with 5+ unique characters'
+    )

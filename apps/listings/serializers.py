@@ -22,6 +22,7 @@ class PropertySerializer(serializers.ModelSerializer):
     ownerId = serializers.UUIDField(source='owner_id', read_only=True)
     ownerName = serializers.SerializerMethodField()
     ownerPhone = serializers.SerializerMethodField()
+    ownerWhatsapp = serializers.SerializerMethodField()
     seatType = serializers.CharField(source='seat_type', allow_null=True, required=False)
     mealIncluded = serializers.BooleanField(
         source='meal_included',
@@ -125,6 +126,7 @@ class PropertySerializer(serializers.ModelSerializer):
             'ownerId',
             'ownerName',
             'ownerPhone',
+            'ownerWhatsapp',
             'createdAt',
             'instantBook',
             'depositMonths',
@@ -152,6 +154,7 @@ class PropertySerializer(serializers.ModelSerializer):
             'ownerId',
             'ownerName',
             'ownerPhone',
+            'ownerWhatsapp',
             'verified',
             'verificationStatus',
             'verifiedAt',
@@ -174,6 +177,9 @@ class PropertySerializer(serializers.ModelSerializer):
 
     def get_ownerPhone(self, obj):
         return obj.owner.phone
+
+    def get_ownerWhatsapp(self, obj) -> str:
+        return obj.owner.whatsapp_number or ''
 
     def get_rent(self, obj):
         return _money(obj.rent)

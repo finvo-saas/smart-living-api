@@ -130,6 +130,9 @@ class HotelListCreateView(APIView):
     def post(self, request):
         if request.user.role not in ('owner', 'admin'):
             raise ForbiddenError('Only owners can register hotels.')
+        from subscriptions.services import assert_can_add_hotel
+
+        assert_can_add_hotel(request.user)
         serializer = HotelRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         hotel = serializer.create_hotel(request.user)

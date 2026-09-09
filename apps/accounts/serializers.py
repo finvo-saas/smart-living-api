@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from accounts.fields import WhatsAppNumberField
 from accounts.models import (
     AdminProfile,
     Role,
@@ -28,6 +29,7 @@ class PhoneTokenObtainPairSerializer(TokenObtainPairSerializer):
 class UserSerializer(serializers.ModelSerializer):
     adminRole = serializers.SerializerMethodField()
     phoneDigits = serializers.SerializerMethodField()
+    whatsappNumber = serializers.CharField(source='whatsapp_number', read_only=True)
     profilePhotoUrl = serializers.SerializerMethodField()
     roleSelected = serializers.BooleanField(source='role_selected', read_only=True)
     isPhoneVerified = serializers.BooleanField(source='is_phone_verified', read_only=True)
@@ -40,6 +42,15 @@ class UserSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     pushOptIn = serializers.BooleanField(source='push_opt_in', read_only=True)
+    ownerPrimaryFocus = serializers.CharField(
+        source='owner_primary_focus',
+        read_only=True,
+    )
+    ownerEnabledVerticals = serializers.SerializerMethodField()
+    ownerFocusSelected = serializers.BooleanField(
+        source='owner_focus_selected',
+        read_only=True,
+    )
 
     class Meta:
         model = User
@@ -47,6 +58,7 @@ class UserSerializer(serializers.ModelSerializer):
             'id',
             'phone',
             'phoneDigits',
+            'whatsappNumber',
             'email',
             'name',
             'role',
@@ -59,6 +71,9 @@ class UserSerializer(serializers.ModelSerializer):
             'adminRole',
             'heartbeatSmsOptIn',
             'pushOptIn',
+            'ownerPrimaryFocus',
+            'ownerEnabledVerticals',
+            'ownerFocusSelected',
             'createdAt',
             'updatedAt',
         )
@@ -81,14 +96,32 @@ class UserSerializer(serializers.ModelSerializer):
             request=self.context.get('request'),
         )
 
+    def get_ownerEnabledVerticals(self, obj):
+        return obj.owner_verticals_list()
+
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     profilePhoto = serializers.ImageField(source='profile_photo', required=False)
+    whatsappNumber = WhatsAppNumberField(source='whatsapp_number')
     heartbeatSmsOptIn = serializers.BooleanField(
         source='heartbeat_sms_opt_in',
         required=False,
     )
     pushOptIn = serializers.BooleanField(source='push_opt_in', required=False)
+    ownerPrimaryFocus = serializers.CharField(
+        source='owner_primary_focus',
+        required=False,
+        allow_blank=True,
+    )
+    ownerEnabledVerticals = serializers.ListField(
+        child=serializers.ChoiceField(choices=['mess', 'apartment', 'hotel']),
+        required=False,
+        source='owner_enabled_verticals',
+    )
+    ownerFocusSelected = serializers.BooleanField(
+        source='owner_focus_selected',
+        required=False,
+    )
 
     class Meta:
         model = User
@@ -96,9 +129,13 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'name',
             'email',
             'locale',
+            'whatsappNumber',
             'profilePhoto',
             'heartbeatSmsOptIn',
             'pushOptIn',
+            'ownerPrimaryFocus',
+            'ownerEnabledVerticals',
+            'ownerFocusSelected',
         )
 
     def validate_profilePhoto(self, value):
@@ -106,9 +143,78 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             media_storage.validate(value, 'profile')
         return value
 
+    def to_internal_value(self, data):
+        # FormData may send JSON string for arrays / booleans
+        mutable = data
+        try:
+            if hasattr(data, 'copy'):
+                mutable = data.copy()
+        except Exception:
+            mutable = data
+
+        if hasattr(mutable, 'get'):
+            raw = mutable.get('ownerEnabledVerticals')
+            if isinstance(raw, str):
+                import json
+
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    parsed = [v.strip() for v in raw.split(',') if v.strip()]
+                if hasattr(mutable, 'setlist'):
+                    mutable.setlist('ownerEnabledVerticals', parsed)
+                else:
+                    mutable['ownerEnabledVerticals'] = parsed
+            for flag in ('ownerFocusSelected', 'heartbeatSmsOptIn', 'pushOptIn'):
+                val = mutable.get(flag)
+                if isinstance(val, str) and val.lower() in ('true', 'false'):
+                    mutable[flag] = val.lower() == 'true'
+        return super().to_internal_value(mutable)
+
+    def validate(self, attrs):
+        verticals = attrs.get('owner_enabled_verticals')
+        primary = attrs.get('owner_primary_focus')
+        if verticals is not None:
+            if len(verticals) == 0:
+                raise serializers.ValidationError(
+                    {'ownerEnabledVerticals': 'Select at least one business type.'}
+                )
+            if primary and primary not in verticals:
+                attrs['owner_primary_focus'] = verticals[0]
+            elif not primary:
+                attrs['owner_primary_focus'] = verticals[0]
+            attrs['owner_focus_selected'] = True
+        elif primary:
+            current = (
+                self.instance.owner_verticals_list()
+                if self.instance is not None
+                else []
+            )
+            if current and primary not in current:
+                raise serializers.ValidationError(
+                    {
+                        'ownerPrimaryFocus': 'Primary focus must be one of your enabled business types.'
+                    }
+                )
+        return attrs
+
     def update(self, instance, validated_data):
         photo = validated_data.pop('profile_photo', None)
+        verticals = validated_data.pop('owner_enabled_verticals', None)
         instance = super().update(instance, validated_data)
+        if verticals is not None:
+            instance.owner_enabled_verticals = verticals
+            if not instance.owner_primary_focus or instance.owner_primary_focus not in verticals:
+                instance.owner_primary_focus = verticals[0]
+            instance.owner_focus_selected = True
+            instance.save(
+                update_fields=[
+                    'owner_enabled_verticals',
+                    'owner_primary_focus',
+                    'owner_focus_selected',
+                    'updated_at',
+                ]
+            )
         if photo is not None:
             media_storage.save_field(instance, 'profile_photo', photo, 'profile')
             instance.save(update_fields=['profile_photo', 'updated_at'])

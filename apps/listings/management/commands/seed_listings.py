@@ -202,6 +202,7 @@ class Command(BaseCommand):
                     'role': Role.OWNER,
                     'role_selected': True,
                     'is_phone_verified': True,
+                    'whatsapp_number': item['owner_phone'],
                 },
             )
             if owner.role != Role.OWNER:

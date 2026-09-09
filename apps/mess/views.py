@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -14,6 +15,7 @@ from mess.models import (
     DEFAULT_MEAL_TIMING,
     MealPreference,
     MealTiming,
+    MemberDeposit,
     Mess,
     MessExpense,
     MessNotice,
@@ -61,6 +63,7 @@ from mess.serializers import (
     SMSTemplateWriteSerializer,
     StudentAssignSerializer,
     StudentSerializer,
+    StudentUpdateSerializer,
     WeeklyScheduleSerializer,
     WeeklyScheduleWriteSerializer,
 )
@@ -71,9 +74,19 @@ from mess.services.attendance import (
     get_student_for_summary,
 )
 from mess.services.bills import get_or_create_mess_bill
-from mess.services.expenses import generate_expense_report, monthly_expense_summary
-from mess.services.seats import assign_student
+from mess.services.expenses import (
+    generate_expense_report,
+    monthly_expense_summary,
+    parse_month,
+)
+from mess.services.hisab import preview_month, serialize_deposit
+from mess.services.seats import assign_student, remove_student, update_student
 from mess.services.sms import send_bulk_sms
+from mess.services.sms_credits import (
+    purchase_sms_package,
+    serialize_ledger,
+    serialize_wallet,
+)
 
 
 def _mess_qs():
@@ -88,7 +101,16 @@ def _get_mess(pk):
 
 
 def _is_mess_owner(mess, user):
-    return mess.owner_id == user.id or user.role == 'admin'
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    if user.role == 'admin':
+        return True
+    if mess.owner_id and mess.owner_id == user.id:
+        return True
+    # Seed/legacy rows: match by phone when FK is missing or out of sync
+    user_phone = (getattr(user, 'phone', None) or '').strip()
+    mess_phone = (getattr(mess, 'owner_phone', None) or '').strip()
+    return bool(user_phone and mess_phone and user_phone == mess_phone)
 
 
 def _is_mess_student(mess, user):
@@ -107,7 +129,7 @@ def _assert_mess_owner(mess, user):
 
 def _assert_mess_read(mess, user):
     if not user.is_authenticated:
-        return
+        raise ForbiddenError('Authentication required.')
     if _is_mess_owner(mess, user) or _is_mess_student(mess, user) or user.role == 'admin':
         return
     raise ForbiddenError('You do not have access to this mess.')
@@ -177,7 +199,10 @@ class MessListCreateView(APIView):
         if request.user.is_authenticated and request.user.role == 'owner':
             owner_only = request.query_params.get('mine')
             if owner_only in ('1', 'true', 'yes'):
-                qs = qs.filter(owner=request.user)
+                qs = qs.filter(
+                    Q(owner=request.user)
+                    | Q(owner_phone=request.user.phone),
+                )
             else:
                 qs = qs.filter(flagged_unavailable_at__isnull=True)
         else:
@@ -187,6 +212,9 @@ class MessListCreateView(APIView):
     def post(self, request):
         if request.user.role not in ('owner', 'admin'):
             raise ForbiddenError('Only owners can create messes.')
+        from subscriptions.services import assert_can_add_mess
+
+        assert_can_add_mess(request.user)
         serializer = MessCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         mess = serializer.create_mess(request.user)
@@ -206,11 +234,36 @@ class MessStudentsView(APIView):
 
     def get(self, request, pk):
         mess = _get_mess(pk)
-        if not _is_mess_owner(mess, request.user) and not _is_mess_student(mess, request.user):
-            if request.user.role != 'admin':
-                raise ForbiddenError('Access denied.')
-        qs = MessStudent.objects.filter(mess=mess, is_deleted=False).order_by('-joined_date')
-        return Response(api_success(_serialize_students(qs)))
+        can_manage = _is_mess_owner(mess, request.user) or request.user.role == 'admin'
+        if not can_manage and not _is_mess_student(mess, request.user):
+            raise ForbiddenError('Access denied.')
+        qs = MessStudent.objects.filter(mess=mess, is_deleted=False).select_related(
+            'mess',
+            'seat',
+        )
+        if not can_manage:
+            # Boarders only ever see their own record, never the roster.
+            qs = qs.filter(user=request.user)
+            return Response(api_success(_serialize_students(qs.order_by('-joined_date'))))
+
+        search = (request.query_params.get('q') or '').strip()
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search)
+                | Q(phone__icontains=search)
+                | Q(seat_number__icontains=search)
+                | Q(university__icontains=search)
+                | Q(organization__icontains=search),
+            )
+        occupant_type = (request.query_params.get('type') or '').strip()
+        if occupant_type and occupant_type != 'all':
+            qs = qs.filter(occupant_type=occupant_type)
+        member_status = (request.query_params.get('status') or '').strip()
+        if member_status == 'active':
+            qs = qs.filter(is_active=True)
+        elif member_status in ('inactive', 'left'):
+            qs = qs.filter(is_active=False)
+        return Response(api_success(_serialize_students(qs.order_by('-joined_date'))))
 
     def post(self, request, pk):
         mess = _get_mess(pk)
@@ -222,6 +275,90 @@ class MessStudentsView(APIView):
             api_success(_serialize_student(student)),
             status=status.HTTP_201_CREATED,
         )
+
+
+class MessStudentDetailView(APIView):
+    """One member: full profile plus the owner's edit / move-out actions."""
+
+    permission_classes = [IsAuthenticated]
+
+    def _get_student(self, mess, student_id):
+        try:
+            return MessStudent.objects.select_related('mess', 'seat').get(
+                pk=student_id,
+                mess=mess,
+                is_deleted=False,
+            )
+        except MessStudent.DoesNotExist as exc:
+            raise NotFoundError('Member not found.') from exc
+
+    def get(self, request, pk, student_id):
+        mess = _get_mess(pk)
+        can_manage = _is_mess_owner(mess, request.user) or request.user.role == 'admin'
+        student = self._get_student(mess, student_id)
+        if not can_manage and student.user_id != request.user.id:
+            raise ForbiddenError('Access denied.')
+
+        today = timezone.now().date()
+        month_start = today.replace(day=1)
+        month = preview_month(mess, today.year, today.month)
+        hisab_row = next(
+            (
+                row
+                for row in month['members']
+                if row['studentId'] == str(student.id)
+            ),
+            None,
+        )
+        deposits = MemberDeposit.objects.filter(
+            mess=mess,
+            student=student,
+            is_deleted=False,
+        ).select_related('student').order_by('-date', '-created_at')[:10]
+        violations = RuleViolation.objects.filter(
+            mess=mess,
+            student=student,
+        ).order_by('-violation_date')[:10]
+
+        return Response(
+            api_success(
+                {
+                    'member': _serialize_student(student),
+                    'attendance': build_attendance_summary(
+                        mess,
+                        student,
+                        month_start,
+                        today,
+                    ),
+                    'hisab': {
+                        'year': today.year,
+                        'month': today.month,
+                        'mealRate': month['mealRate'],
+                        'row': hisab_row,
+                    },
+                    'deposits': [serialize_deposit(dep) for dep in deposits],
+                    'violations': RuleViolationSerializer(violations, many=True).data,
+                },
+            ),
+        )
+
+    def patch(self, request, pk, student_id):
+        mess = _get_mess(pk)
+        _assert_mess_owner(mess, request.user)
+        student = self._get_student(mess, student_id)
+        serializer = StudentUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not serializer.validated_data:
+            raise InvalidError('Nothing to update.')
+        student = update_student(student, serializer.validated_data)
+        return Response(api_success(_serialize_student(student)))
+
+    def delete(self, request, pk, student_id):
+        mess = _get_mess(pk)
+        _assert_mess_owner(mess, request.user)
+        student = self._get_student(mess, student_id)
+        remove_student(student)
+        return Response(api_success({'id': str(student.id), 'removed': True}))
 
 
 class MessSeatsView(APIView):
@@ -614,7 +751,7 @@ class AttendanceBulkView(APIView):
         _assert_mess_owner(mess, request.user)
         serializer = AttendanceBulkSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        bulk_date = serializer.validated_data['date']
+        bulk_date = serializer.validated_data.get('date')
         created = []
         for item in serializer.validated_data['records']:
             try:
@@ -625,20 +762,40 @@ class AttendanceBulkView(APIView):
                 )
             except MessStudent.DoesNotExist:
                 continue
-            record = AttendanceRecord.objects.create(
+            record_date = item.get('date', bulk_date)
+            record_type = item.get('type', 'general')
+            meal_category = item.get('mealCategory', '')
+            values = {
+                'student_name': student.name,
+                'status': item['status'],
+                'check_in_time': item.get('checkInTime'),
+                'check_out_time': item.get('checkOutTime'),
+                'notes': item.get('notes', ''),
+                'marked_by': request.user,
+                'marked_at': timezone.now(),
+            }
+            # Re-marking the same slot corrects the existing row instead of
+            # stacking duplicates that would double-count the summaries.
+            record = AttendanceRecord.objects.filter(
                 mess=mess,
                 student=student,
-                student_name=student.name,
-                date=item.get('date', bulk_date),
-                status=item['status'],
-                type=item.get('type', 'general'),
-                check_in_time=item.get('checkInTime'),
-                check_out_time=item.get('checkOutTime'),
-                meal_category=item.get('mealCategory', ''),
-                notes=item.get('notes', ''),
-                marked_by=request.user,
-                marked_at=timezone.now(),
-            )
+                date=record_date,
+                type=record_type,
+                meal_category=meal_category,
+            ).order_by('-marked_at').first()
+            if record:
+                for field, value in values.items():
+                    setattr(record, field, value)
+                record.save(update_fields=[*values.keys(), 'updated_at'])
+            else:
+                record = AttendanceRecord.objects.create(
+                    mess=mess,
+                    student=student,
+                    date=record_date,
+                    type=record_type,
+                    meal_category=meal_category,
+                    **values,
+                )
             created.append(record)
         return Response(
             api_success(AttendanceRecordSerializer(created, many=True).data),
@@ -853,6 +1010,13 @@ class SMSHistoryView(APIView):
         mess = _get_mess(pk)
         _assert_mess_owner(mess, request.user)
         messages = SMSMessage.objects.filter(mess=mess).order_by('-created_at')
+        start = request.query_params.get('startDate')
+        end = request.query_params.get('endDate')
+        if start:
+            messages = messages.filter(created_at__date__gte=start)
+        if end:
+            messages = messages.filter(created_at__date__lte=end)
+        messages = list(messages)
         total_sent = sum(m.successful for m in messages)
         total_failed = sum(m.failed for m in messages)
         total_cost = sum(float(m.cost or 0) for m in messages)
@@ -863,9 +1027,81 @@ class SMSHistoryView(APIView):
             'totalFailed': total_failed,
             'totalCost': total_cost,
             'period': {
-                'startDate': (today.replace(day=1)).isoformat(),
-                'endDate': today.isoformat(),
+                'startDate': start or (today.replace(day=1)).isoformat(),
+                'endDate': end or today.isoformat(),
             },
+        }))
+
+
+class OwnerSMSWalletView(APIView):
+    """Platform SMS wallet — system BulkSMSBD credits for the logged-in owner."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role not in ('owner', 'admin'):
+            raise ForbiddenError('Only owners can view SMS credits.')
+        return Response(api_success(serialize_wallet(request.user)))
+
+
+class OwnerSMSPurchaseView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if request.user.role not in ('owner', 'admin'):
+            raise ForbiddenError('Only owners can buy SMS credits.')
+        package_id = request.data.get('packageId') or request.data.get('package_id')
+        if not package_id:
+            raise InvalidError('packageId is required.')
+        result = purchase_sms_package(request.user, str(package_id))
+        return Response(
+            api_success({**result, 'wallet': serialize_wallet(request.user)}),
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class OwnerSMSLedgerView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role not in ('owner', 'admin'):
+            raise ForbiddenError('Only owners can view SMS ledger.')
+        limit = min(int(request.query_params.get('limit') or 50), 200)
+        return Response(api_success({
+            'wallet': serialize_wallet(request.user),
+            'ledger': serialize_ledger(request.user, limit=limit),
+        }))
+
+
+class OwnerSMSHistoryView(APIView):
+    """All SMS batches sent by this owner across their messes."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role not in ('owner', 'admin'):
+            raise ForbiddenError('Only owners can view SMS history.')
+        qs = (
+            SMSMessage.objects.filter(sent_by=request.user)
+            .select_related('mess')
+            .order_by('-created_at')
+        )
+        mess_id = request.query_params.get('messId')
+        if mess_id:
+            qs = qs.filter(mess_id=mess_id)
+        start = request.query_params.get('startDate')
+        end = request.query_params.get('endDate')
+        if start:
+            qs = qs.filter(created_at__date__gte=start)
+        if end:
+            qs = qs.filter(created_at__date__lte=end)
+        rows = list(qs[:200])
+        return Response(api_success({
+            'wallet': serialize_wallet(request.user),
+            'messages': SMSMessageSerializer(rows, many=True).data,
+            'totalSent': sum(m.successful for m in rows),
+            'totalFailed': sum(m.failed for m in rows),
+            'totalCost': sum(float(m.cost or 0) for m in rows),
         }))
 
 
@@ -1127,11 +1363,13 @@ class MessExpenseSummaryView(APIView):
     def get(self, request, pk):
         mess = _get_mess(pk)
         _assert_mess_owner(mess, request.user)
-        month = request.query_params.get('month')
-        year = request.query_params.get('year')
         today = timezone.now().date()
-        month_num = int(month) if month else today.month
-        year_num = int(year) if year else today.year
+        month_num = parse_month(request.query_params.get('month'), today.month)
+        year = request.query_params.get('year')
+        try:
+            year_num = int(year) if year else today.year
+        except (TypeError, ValueError) as exc:
+            raise InvalidError('Invalid year.') from exc
         summary = monthly_expense_summary(mess, month_num, year_num)
         return Response(api_success(summary))
 
@@ -1151,7 +1389,7 @@ class MessExpenseReportView(APIView):
             mess,
             request.user,
             report_type=report_type,
-            month=int(month) if month else None,
+            month=parse_month(month, 0) if month else None,
             year=int(year) if year else None,
             start_date=date.fromisoformat(start) if start else None,
             end_date=date.fromisoformat(end) if end else None,

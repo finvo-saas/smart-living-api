@@ -16,12 +16,13 @@ SEED_STEPS = [
     'seed_renter_tools',
     'seed_admin_tools',
     'seed_relations',
+    'seed_owner_focus',
 ]
 
 
 class Command(BaseCommand):
     help = (
-        'Seed the full Smart Living catalog: users, listings, hotels, mess, '
+        'Seed the full SmartBasa catalog: users, listings, hotels, mess, '
         'portfolio, bills, bookings, chats, and admin tools.'
     )
 
@@ -47,6 +48,9 @@ class Command(BaseCommand):
             call_command(name, **kwargs)
         self.stdout.write(self.style.SUCCESS('All Bangladesh seeds finished.'))
         self.stdout.write('Login phones (OTP 123456 in DEBUG):')
-        self.stdout.write('  Super admin  +8801711111111')
-        self.stdout.write('  Owner        +8801712345678  Abdul Karim')
-        self.stdout.write('  Renter       +8801710000001  Rahim Uddin')
+        self.stdout.write('  Super admin     +8801711111111')
+        self.stdout.write('  Mess owner      +8801917161352  Abdul Karim (Green Valley)')
+        self.stdout.write('  Apartment owner +8801712345680  Karim Hossain')
+        self.stdout.write('  Hotel owner     +8801512345678  Tanvir Hasan')
+        self.stdout.write('  Renter          +8801710000001  Rahim Uddin')
+        self.stdout.write('  (Also remapped renter/admin via fix_phone_users if used.)')

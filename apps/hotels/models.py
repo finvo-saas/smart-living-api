@@ -91,6 +91,9 @@ class Hotel(UUIDModel, TimestampedModel):
     minimum_stay = models.PositiveSmallIntegerField(default=1)
 
     license_number = models.CharField(max_length=64, blank=True, default='')
+    # Uploaded licenses are private: keep the storage key and sign per read.
+    # license_document holds the document name or an externally hosted link.
+    license_document_key = models.CharField(max_length=512, blank=True, default='')
     license_document = models.URLField(blank=True, default='')
 
     verified = models.BooleanField(default=False, db_index=True)

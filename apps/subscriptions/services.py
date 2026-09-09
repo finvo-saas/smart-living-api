@@ -1,4 +1,4 @@
-"""Owner subscription helpers and flat-limit enforcement."""
+"""Owner subscription helpers and per-module limit enforcement."""
 
 from __future__ import annotations
 
@@ -10,6 +10,13 @@ from django.utils import timezone
 from subscriptions.models import OwnerSubscription, PlanTier, SubscriptionPlan
 
 
+class ModuleLimitStatus(TypedDict):
+    used: int
+    max: int
+    atLimit: bool
+    nearLimit: bool
+
+
 class FlatLimitStatus(TypedDict):
     used: int
     max: int
@@ -19,13 +26,34 @@ class FlatLimitStatus(TypedDict):
     planName: str
 
 
+class OwnerUsageStatus(TypedDict):
+    planTier: str
+    planName: str
+    enabledVerticals: list[str]
+    primaryFocus: str
+    mess: ModuleLimitStatus
+    apartment: ModuleLimitStatus
+    hotel: ModuleLimitStatus
+    # Legacy flat-shaped fields kept for older clients
+    used: int
+    max: int
+    atLimit: bool
+    nearLimit: bool
+
+
 DEFAULT_PLANS = [
     {
         'tier': PlanTier.FREE,
         'name': 'Free',
         'price': 0,
         'max_flats': 3,
-        'features': ['Up to 3 flats', 'Basic billing'],
+        'max_messes': 1,
+        'max_hotels': 1,
+        'features': [
+            '1 mess · 3 flats · 1 hotel',
+            'Basic billing',
+            '20 free SMS / month',
+        ],
         'highlighted': False,
     },
     {
@@ -33,7 +61,14 @@ DEFAULT_PLANS = [
         'name': 'Basic',
         'price': 500,
         'max_flats': 10,
-        'features': ['Up to 10 flats', 'Bill templates', 'SMS reminders'],
+        'max_messes': 3,
+        'max_hotels': 3,
+        'features': [
+            '3 messes · 10 flats · 3 hotels',
+            'Bill templates',
+            '100 free SMS / month',
+            'Buy extra SMS credits',
+        ],
         'highlighted': True,
     },
     {
@@ -41,7 +76,14 @@ DEFAULT_PLANS = [
         'name': 'Premium',
         'price': 2000,
         'max_flats': -1,
-        'features': ['Unlimited flats', 'Featured listings', 'Priority support'],
+        'max_messes': -1,
+        'max_hotels': -1,
+        'features': [
+            'Unlimited messes, flats & hotels',
+            'Featured listings',
+            '500 free SMS / month',
+            'Priority support',
+        ],
         'highlighted': False,
     },
 ]
@@ -72,6 +114,8 @@ def ensure_default_plans() -> None:
                 'name': spec['name'],
                 'price': spec['price'],
                 'max_flats': spec['max_flats'],
+                'max_messes': spec['max_messes'],
+                'max_hotels': spec['max_hotels'],
                 'features': spec['features'],
                 'highlighted': spec['highlighted'],
                 'is_active': True,
@@ -93,32 +137,78 @@ def get_or_create_owner_subscription(user) -> OwnerSubscription:
     ensure_default_plans()
     existing = OwnerSubscription.objects.filter(owner=user).select_related('plan').first()
     if existing:
+        # Keep SMS monthly free quota in sync when owner is active
+        from mess.services.sms_credits import ensure_monthly_free_quota
+
+        ensure_monthly_free_quota(user)
         return existing
 
     free_plan = SubscriptionPlan.objects.get(tier=PlanTier.FREE)
     cycle_start, cycle_end = _billing_cycle_dates()
-    return OwnerSubscription.objects.create(
+    sub = OwnerSubscription.objects.create(
         owner=user,
         plan=free_plan,
         billing_cycle_start=cycle_start,
         billing_cycle_end=cycle_end,
     )
+    from mess.services.sms_credits import ensure_monthly_free_quota
+
+    ensure_monthly_free_quota(user)
+    return sub
+
+
+def _module_status(used: int, max_value: int) -> ModuleLimitStatus:
+    unlimited = max_value < 0
+    return {
+        'used': used,
+        'max': max_value,
+        'atLimit': not unlimited and used >= max_value,
+        'nearLimit': not unlimited and used >= max(1, int(max_value * 0.8)),
+    }
+
+
+def get_owner_usage_status(user) -> OwnerUsageStatus:
+    """Per-module usage for mess / flats / hotels, plus legacy flat fields."""
+    sub = get_or_create_owner_subscription(user)
+    plan = sub.plan
+    mess = _module_status(sub.messes_used, plan.max_messes)
+    apartment = _module_status(sub.flats_used, plan.max_flats)
+    hotel = _module_status(sub.hotels_used, plan.max_hotels)
+
+    enabled = []
+    if hasattr(user, 'owner_verticals_list'):
+        enabled = list(user.owner_verticals_list())
+    elif getattr(user, 'owner_enabled_verticals', None):
+        enabled = list(user.owner_enabled_verticals or [])
+
+    primary = getattr(user, 'owner_primary_focus', '') or ''
+
+    return {
+        'planTier': plan.tier,
+        'planName': plan.name,
+        'enabledVerticals': enabled,
+        'primaryFocus': primary,
+        'mess': mess,
+        'apartment': apartment,
+        'hotel': hotel,
+        # Backward-compatible flat shape (apartment module)
+        'used': apartment['used'],
+        'max': apartment['max'],
+        'atLimit': apartment['atLimit'],
+        'nearLimit': apartment['nearLimit'],
+    }
 
 
 def get_flat_limit_status(user) -> FlatLimitStatus:
-    sub = get_or_create_owner_subscription(user)
-    plan = sub.plan
-    max_flats = plan.max_flats
-    used = sub.flats_used
-    unlimited = max_flats < 0
-
+    """Legacy apartment-only shape — prefer get_owner_usage_status."""
+    usage = get_owner_usage_status(user)
     return {
-        'used': used,
-        'max': max_flats,
-        'atLimit': not unlimited and used >= max_flats,
-        'nearLimit': not unlimited and used >= max(1, int(max_flats * 0.8)),
-        'planTier': plan.tier,
-        'planName': plan.name,
+        'used': usage['apartment']['used'],
+        'max': usage['apartment']['max'],
+        'atLimit': usage['apartment']['atLimit'],
+        'nearLimit': usage['apartment']['nearLimit'],
+        'planTier': usage['planTier'],
+        'planName': usage['planName'],
     }
 
 
@@ -130,6 +220,30 @@ def assert_can_add_flat(user) -> None:
         raise InvalidError(
             f'Flat limit reached ({status["used"]}/{status["max"]}). '
             f'Upgrade your {status["planName"]} plan to add more flats.',
+        )
+
+
+def assert_can_add_mess(user) -> None:
+    from core.exceptions import InvalidError
+
+    status = get_owner_usage_status(user)['mess']
+    if status['atLimit']:
+        plan_name = get_or_create_owner_subscription(user).plan.name
+        raise InvalidError(
+            f'Mess limit reached ({status["used"]}/{status["max"]}). '
+            f'Upgrade your {plan_name} plan to add more messes.',
+        )
+
+
+def assert_can_add_hotel(user) -> None:
+    from core.exceptions import InvalidError
+
+    status = get_owner_usage_status(user)['hotel']
+    if status['atLimit']:
+        plan_name = get_or_create_owner_subscription(user).plan.name
+        raise InvalidError(
+            f'Hotel limit reached ({status["used"]}/{status["max"]}). '
+            f'Upgrade your {plan_name} plan to add more hotels.',
         )
 
 
@@ -147,6 +261,15 @@ def upgrade_owner_plan(user, tier: str) -> OwnerSubscription:
     sub.billing_cycle_start = cycle_start
     sub.billing_cycle_end = cycle_end
     sub.save(update_fields=['plan', 'billing_cycle_start', 'billing_cycle_end', 'updated_at'])
+    # Reset period key so upgraded plan free quota can grant immediately
+    from mess.models import OwnerSMSAccount
+    from mess.services.sms_credits import ensure_monthly_free_quota
+
+    account = OwnerSMSAccount.objects.filter(owner=user).first()
+    if account:
+        account.free_quota_period = ''
+        account.save(update_fields=['free_quota_period', 'updated_at'])
+    ensure_monthly_free_quota(user)
     return sub
 
 

@@ -63,7 +63,7 @@ def ensure_system_settings() -> SystemSettings:
     commission_pct = round(float(getattr(settings, 'COMMISSION_RATE', 0.05)) * 100, 2)
     obj = SystemSettings.load()
     if not obj.subscription_plans:
-        obj.platform_name = obj.platform_name or 'Smart Living'
+        obj.platform_name = obj.platform_name or 'SmartBasa'
         obj.commission_rate = obj.commission_rate or commission_pct or 5.0
         obj.subscription_plans = default_subscription_plans()
         obj.feature_flags = obj.feature_flags or default_feature_flags()

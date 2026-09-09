@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from accounts.fields import WhatsAppNumberField
 from discovery.services.freshness import freshness_dict
 from mess.models import (
     AttendanceRecord,
@@ -12,6 +13,7 @@ from mess.models import (
     MessNoticeAck,
     MessRule,
     MessStudent,
+    OccupantType,
     RuleAcceptance,
     RuleViolation,
     Seat,
@@ -50,6 +52,7 @@ class MessSerializer(serializers.ModelSerializer):
     monthlyFee = serializers.FloatField(source='monthly_fee')
     ownerName = serializers.CharField(source='owner_name', read_only=True)
     ownerPhone = serializers.CharField(source='owner_phone', read_only=True)
+    ownerWhatsapp = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     listingId = serializers.UUIDField(source='listing_id', read_only=True, allow_null=True)
     featured = serializers.BooleanField(read_only=True)
@@ -81,6 +84,7 @@ class MessSerializer(serializers.ModelSerializer):
             'description',
             'ownerName',
             'ownerPhone',
+            'ownerWhatsapp',
             'createdAt',
             'listingId',
             'featured',
@@ -92,6 +96,10 @@ class MessSerializer(serializers.ModelSerializer):
             'utilities',
             'bookUrl',
         )
+
+    def get_ownerWhatsapp(self, obj) -> str:
+        """Live from the account so a later profile edit is picked up."""
+        return getattr(obj.owner, 'whatsapp_number', '') or ''
 
     def get_confirmedHoursAgo(self, obj):
         return freshness_dict(obj)['confirmedHoursAgo']
@@ -144,45 +152,133 @@ class MessCreateSerializer(serializers.Serializer):
 
 class StudentSerializer(serializers.ModelSerializer):
     messId = serializers.UUIDField(source='mess_id', read_only=True)
+    messName = serializers.CharField(source='mess.name', read_only=True)
     userId = serializers.SerializerMethodField()
+    whatsappNumber = serializers.CharField(source='whatsapp_number', read_only=True)
+    occupantType = serializers.CharField(source='occupant_type', read_only=True)
+    photoUrl = serializers.CharField(source='photo_url', read_only=True)
     studentId = serializers.CharField(source='student_id_code', allow_blank=True, required=False)
+    emergencyContactName = serializers.CharField(
+        source='emergency_contact_name',
+        read_only=True,
+    )
+    emergencyContactPhone = serializers.CharField(
+        source='emergency_contact_phone',
+        read_only=True,
+    )
+    nidNumber = serializers.CharField(source='nid_number', read_only=True)
+    permanentAddress = serializers.CharField(source='permanent_address', read_only=True)
     seatNumber = serializers.CharField(source='seat_number', allow_blank=True, required=False)
+    roomNumber = serializers.SerializerMethodField()
     joinedDate = serializers.DateField(source='joined_date')
+    leftDate = serializers.DateField(source='left_date', allow_null=True, read_only=True)
     monthlyFee = serializers.FloatField(source='monthly_fee')
+    isActive = serializers.BooleanField(source='is_active', read_only=True)
 
     class Meta:
         model = MessStudent
         fields = (
             'id',
             'messId',
+            'messName',
             'userId',
             'name',
             'phone',
+            'whatsappNumber',
             'email',
+            'occupantType',
+            'photoUrl',
             'studentId',
             'university',
+            'organization',
+            'designation',
+            'emergencyContactName',
+            'emergencyContactPhone',
+            'nidNumber',
+            'permanentAddress',
+            'notes',
             'seatNumber',
+            'roomNumber',
             'joinedDate',
+            'leftDate',
             'monthlyFee',
+            'isActive',
         )
 
     def get_userId(self, obj) -> str:
         return str(obj.user_id) if obj.user_id else ''
 
+    def get_roomNumber(self, obj) -> str:
+        return obj.seat.room_number if obj.seat_id else ''
+
 
 class StudentAssignSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     phone = serializers.CharField(max_length=20)
+    whatsappNumber = WhatsAppNumberField(default='')
     email = serializers.EmailField(required=False, allow_blank=True, default='')
+    occupantType = serializers.ChoiceField(
+        choices=OccupantType.choices,
+        required=False,
+        default=OccupantType.STUDENT,
+    )
+    photoUrl = serializers.URLField(required=False, allow_blank=True, default='')
     studentId = serializers.CharField(required=False, allow_blank=True, default='')
     university = serializers.CharField(required=False, allow_blank=True, default='')
+    organization = serializers.CharField(required=False, allow_blank=True, default='')
+    designation = serializers.CharField(required=False, allow_blank=True, default='')
+    emergencyContactName = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default='',
+    )
+    emergencyContactPhone = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default='',
+    )
+    nidNumber = serializers.CharField(required=False, allow_blank=True, default='')
+    permanentAddress = serializers.CharField(required=False, allow_blank=True, default='')
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
     seatNumber = serializers.CharField(required=False, allow_blank=True, default='')
+    joinedDate = serializers.DateField(required=False, allow_null=True)
     monthlyFee = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
         required=False,
         allow_null=True,
     )
+
+
+class StudentUpdateSerializer(serializers.Serializer):
+    """Partial edit of one member — every field is optional."""
+
+    name = serializers.CharField(max_length=255, required=False)
+    phone = serializers.CharField(max_length=20, required=False)
+    whatsappNumber = WhatsAppNumberField()
+    email = serializers.EmailField(required=False, allow_blank=True)
+    occupantType = serializers.ChoiceField(choices=OccupantType.choices, required=False)
+    photoUrl = serializers.URLField(required=False, allow_blank=True)
+    studentId = serializers.CharField(required=False, allow_blank=True)
+    university = serializers.CharField(required=False, allow_blank=True)
+    organization = serializers.CharField(required=False, allow_blank=True)
+    designation = serializers.CharField(required=False, allow_blank=True)
+    emergencyContactName = serializers.CharField(required=False, allow_blank=True)
+    emergencyContactPhone = serializers.CharField(required=False, allow_blank=True)
+    nidNumber = serializers.CharField(required=False, allow_blank=True)
+    permanentAddress = serializers.CharField(required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    seatNumber = serializers.CharField(required=False, allow_blank=True)
+    vacateSeat = serializers.BooleanField(required=False)
+    joinedDate = serializers.DateField(required=False)
+    leftDate = serializers.DateField(required=False, allow_null=True)
+    monthlyFee = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    isActive = serializers.BooleanField(required=False)
 
 
 class SeatSerializer(serializers.ModelSerializer):
@@ -339,10 +435,24 @@ class WeeklyScheduleSerializer(serializers.ModelSerializer):
 
 
 class WeeklyScheduleWriteSerializer(serializers.Serializer):
-    weekStartDate = serializers.DateField()
-    weekEndDate = serializers.DateField()
-    schedule = serializers.DictField()
+    weekStartDate = serializers.DateField(required=False)
+    weekEndDate = serializers.DateField(required=False)
+    schedule = serializers.DictField(required=False)
     isActive = serializers.BooleanField(required=False, default=True)
+
+    def validate(self, attrs):
+        # Create requires full payload; PATCH may be partial.
+        if not self.partial:
+            missing = [
+                name
+                for name in ('weekStartDate', 'weekEndDate', 'schedule')
+                if name not in attrs
+            ]
+            if missing:
+                raise serializers.ValidationError(
+                    {name: 'This field is required.' for name in missing}
+                )
+        return attrs
 
 
 class MealTimingSerializer(serializers.ModelSerializer):
@@ -425,7 +535,8 @@ class AttendanceMarkSerializer(serializers.Serializer):
 
 
 class AttendanceBulkSerializer(serializers.Serializer):
-    date = serializers.DateField()
+    # Optional fallback: every record already carries its own required date.
+    date = serializers.DateField(required=False)
     records = AttendanceMarkSerializer(many=True)
 
 
@@ -495,12 +606,15 @@ class SMSGroupWriteSerializer(serializers.Serializer):
 
 class SMSMessageSerializer(serializers.ModelSerializer):
     messId = serializers.UUIDField(source='mess_id', read_only=True)
+    messName = serializers.CharField(source='mess.name', read_only=True)
     templateId = serializers.SerializerMethodField()
     recipientType = serializers.CharField(source='recipient_type')
     totalRecipients = serializers.IntegerField(source='total_recipients', read_only=True)
     scheduledAt = serializers.DateTimeField(source='scheduled_at', allow_null=True)
     sentAt = serializers.DateTimeField(source='sent_at', allow_null=True)
     sentBy = serializers.SerializerMethodField()
+    sentByName = serializers.SerializerMethodField()
+    sentByPhone = serializers.SerializerMethodField()
     errorMessage = serializers.CharField(source='error_message', allow_blank=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
 
@@ -509,6 +623,7 @@ class SMSMessageSerializer(serializers.ModelSerializer):
         fields = (
             'id',
             'messId',
+            'messName',
             'templateId',
             'content',
             'recipientType',
@@ -520,6 +635,8 @@ class SMSMessageSerializer(serializers.ModelSerializer):
             'scheduledAt',
             'sentAt',
             'sentBy',
+            'sentByName',
+            'sentByPhone',
             'gateway',
             'cost',
             'errorMessage',
@@ -532,6 +649,16 @@ class SMSMessageSerializer(serializers.ModelSerializer):
 
     def get_sentBy(self, obj):
         return str(obj.sent_by_id) if obj.sent_by_id else ''
+
+    def get_sentByName(self, obj):
+        if not obj.sent_by_id:
+            return ''
+        return getattr(obj.sent_by, 'name', '') or ''
+
+    def get_sentByPhone(self, obj):
+        if not obj.sent_by_id:
+            return ''
+        return getattr(obj.sent_by, 'phone', '') or ''
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

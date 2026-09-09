@@ -256,6 +256,12 @@ class MemberDepositListCreateView(APIView):
             _parse_date(data.get('date') or date.today().isoformat()),
             str(data.get('note') or ''),
             request.user,
+            payment_method=str(
+                data.get('paymentMethod') or data.get('payment_method') or 'Cash'
+            ),
+            transaction_id=str(
+                data.get('transactionId') or data.get('transaction_id') or ''
+            ),
         )
         return Response(
             api_success(hisab.serialize_deposit(dep)),
@@ -278,6 +284,32 @@ class HisabMonthView(APIView):
         if month < 1 or month > 12:
             raise InvalidError('month must be 1–12.')
         return Response(api_success(hisab.preview_month(mess, year, month)))
+
+
+class MemberMonthMealsView(APIView):
+    """Day-by-day meals for one member — the owner's printable meal sheet."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, student_id):
+        mess = _get_mess(pk)
+        _assert_mess_read(mess, request.user)
+        student = _get_student(mess, student_id)
+        # Members may only pull their own sheet; owners/admins may pull anyone's.
+        if not _is_mess_owner(mess, request.user) and student.user_id != request.user.id:
+            raise ForbiddenError('Access denied.')
+
+        today = date.today()
+        try:
+            year = int(request.query_params.get('year') or today.year)
+            month = int(request.query_params.get('month') or today.month)
+        except (TypeError, ValueError) as exc:
+            raise InvalidError('Invalid year/month.') from exc
+        if month < 1 or month > 12:
+            raise InvalidError('month must be 1–12.')
+        return Response(
+            api_success(hisab.member_month_meals(mess, student, year, month)),
+        )
 
 
 class HisabCloseMonthView(APIView):

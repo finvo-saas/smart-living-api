@@ -35,7 +35,7 @@ DEFAULT_HEARTBEAT: dict[str, Any] = {
     'onlyAvailable': True,
     'publicBaseUrl': '',
     'messageTemplate': (
-        'SmartLiving: Is {name} ({city}) still available? '
+        'SmartBasa: Is {name} ({city}) still available? '
         'Confirm here (valid {hours}h): {url}'
     ),
 }
@@ -258,7 +258,7 @@ def _render_message(cfg: dict[str, Any], *, name: str, city: str, url: str) -> s
         )
     except (KeyError, IndexError, ValueError):
         return (
-            f'SmartLiving: Is {name} still available? '
+            f'SmartBasa: Is {name} still available? '
             f'Confirm ({cfg["tokenTtlHours"]}h): {url}'
         )
 

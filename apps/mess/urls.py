@@ -25,6 +25,7 @@ from mess.views import (
     MessRuleListCreateView,
     MessSeatDetailView,
     MessSeatsView,
+    MessStudentDetailView,
     MessStudentsView,
     NoticeAcknowledgeView,
     NoticeDetailView,
@@ -38,6 +39,10 @@ from mess.views import (
     SMSSendView,
     SMSTemplateDetailView,
     SMSTemplateListCreateView,
+    OwnerSMSHistoryView,
+    OwnerSMSLedgerView,
+    OwnerSMSPurchaseView,
+    OwnerSMSWalletView,
     WeeklyScheduleDetailView,
     WeeklyScheduleListCreateView,
 )
@@ -50,6 +55,7 @@ from mess.views_living import (
     MealOffListCreateView,
     MealOffReviewView,
     MemberDepositListCreateView,
+    MemberMonthMealsView,
     MessEnsureListingView,
     MessMealPricingView,
     MessUtilitiesView,
@@ -120,6 +126,16 @@ urlpatterns = [
         name='mess-hisab-month-reopen',
     ),
     path('mess/<uuid:pk>/students/', MessStudentsView.as_view(), name='mess-students'),
+    path(
+        'mess/<uuid:pk>/students/<uuid:student_id>/',
+        MessStudentDetailView.as_view(),
+        name='mess-student-detail',
+    ),
+    path(
+        'mess/<uuid:pk>/students/<uuid:student_id>/meals/',
+        MemberMonthMealsView.as_view(),
+        name='mess-student-month-meals',
+    ),
     path('mess/<uuid:pk>/seats/', MessSeatsView.as_view(), name='mess-seats'),
     path(
         'mess/<uuid:pk>/seats/<uuid:seat_id>/',
@@ -212,6 +228,14 @@ urlpatterns = [
     ),
     path('mess/<uuid:pk>/sms/send/', SMSSendView.as_view(), name='mess-sms-send'),
     path('mess/<uuid:pk>/sms/history/', SMSHistoryView.as_view(), name='mess-sms-history'),
+    path('mess/sms/wallet/', OwnerSMSWalletView.as_view(), name='owner-sms-wallet'),
+    path(
+        'mess/sms/credits/purchase/',
+        OwnerSMSPurchaseView.as_view(),
+        name='owner-sms-purchase',
+    ),
+    path('mess/sms/credits/ledger/', OwnerSMSLedgerView.as_view(), name='owner-sms-ledger'),
+    path('mess/sms/history/', OwnerSMSHistoryView.as_view(), name='owner-sms-history'),
     path('mess/<uuid:pk>/rules/', MessRuleListCreateView.as_view(), name='mess-rules'),
     path(
         'mess/<uuid:pk>/rules/<uuid:rule_id>/',

@@ -22,6 +22,7 @@ from subscriptions.services import (
     get_boost_option,
     get_flat_limit_status,
     get_or_create_owner_subscription,
+    get_owner_usage_status,
     upgrade_owner_plan,
 )
 
@@ -46,10 +47,21 @@ class SubscriptionPlansView(APIView):
 
 
 class FlatLimitStatusView(APIView):
+    """Legacy apartment-only limit. Prefer OwnerUsageStatusView."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         return Response(api_success(get_flat_limit_status(request.user)))
+
+
+class OwnerUsageStatusView(APIView):
+    """Per-module usage (mess / flats / hotels) for the logged-in owner."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(api_success(get_owner_usage_status(request.user)))
 
 
 class UpgradeSubscriptionView(APIView):

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from core.services.media import media_storage
 from discovery.services.freshness import freshness_dict
 from hotels.models import (
     DEFAULT_CANCELLATION,
@@ -23,6 +24,7 @@ class HotelSerializer(serializers.ModelSerializer):
     starRating = serializers.IntegerField(source='star_rating', allow_null=True, required=False)
     ownerName = serializers.CharField(source='owner_name', read_only=True)
     ownerPhone = serializers.CharField(source='owner_phone', read_only=True)
+    ownerWhatsapp = serializers.SerializerMethodField()
     ownerEmail = serializers.CharField(source='owner_email', read_only=True, allow_blank=True)
     checkInTime = serializers.CharField(source='check_in_time')
     checkOutTime = serializers.CharField(source='check_out_time')
@@ -37,6 +39,7 @@ class HotelSerializer(serializers.ModelSerializer):
         required=False,
         allow_blank=True,
     )
+    licenseDocumentUrl = serializers.SerializerMethodField()
     averageRating = serializers.FloatField(source='average_rating', read_only=True)
     totalReviews = serializers.IntegerField(source='total_reviews', read_only=True)
     totalRooms = serializers.IntegerField(source='total_rooms', read_only=True)
@@ -72,6 +75,7 @@ class HotelSerializer(serializers.ModelSerializer):
             'ownerId',
             'ownerName',
             'ownerPhone',
+            'ownerWhatsapp',
             'ownerEmail',
             'address',
             'area',
@@ -86,6 +90,7 @@ class HotelSerializer(serializers.ModelSerializer):
             'minimumStay',
             'licenseNumber',
             'licenseDocument',
+            'licenseDocumentUrl',
             'verified',
             'featured',
             'averageRating',
@@ -107,6 +112,7 @@ class HotelSerializer(serializers.ModelSerializer):
             'ownerId',
             'ownerName',
             'ownerPhone',
+            'ownerWhatsapp',
             'ownerEmail',
             'verified',
             'featured',
@@ -117,6 +123,19 @@ class HotelSerializer(serializers.ModelSerializer):
             'createdAt',
             'updatedAt',
         )
+
+    def get_ownerWhatsapp(self, obj) -> str:
+        """Live from the account so a later profile edit is picked up."""
+        return getattr(obj.owner, 'whatsapp_number', '') or ''
+
+    def get_licenseDocumentUrl(self, obj) -> str:
+        """Signed link for a privately stored license, else the stored value."""
+        if obj.license_document_key:
+            return media_storage.signed_url(
+                obj.license_document_key,
+                request=self.context.get('request'),
+            )
+        return obj.license_document if obj.license_document.startswith('http') else ''
 
     def get_confirmedHoursAgo(self, obj):
         return freshness_dict(obj)['confirmedHoursAgo']
@@ -139,6 +158,7 @@ class HotelRegistrationSerializer(serializers.Serializer):
     minimumStay = serializers.IntegerField(min_value=1)
     licenseNumber = serializers.CharField(required=False, allow_blank=True, default='')
     licenseDocumentName = serializers.CharField(required=False, allow_blank=True, default='')
+    licenseDocumentKey = serializers.CharField(required=False, allow_blank=True, default='')
     imageUrl = serializers.URLField(required=False, allow_blank=True)
     weekendMultiplier = serializers.FloatField(min_value=1)
     serviceChargePercent = serializers.FloatField(min_value=0)
@@ -169,6 +189,10 @@ class HotelRegistrationSerializer(serializers.Serializer):
             minimum_stay=data['minimumStay'],
             license_number=data.get('licenseNumber') or '',
             license_document=data.get('licenseDocumentName') or '',
+            license_document_key=media_storage.ensure_key(
+                data.get('licenseDocumentKey') or '',
+                'document',
+            ),
             images=images,
             cancellation_policy={
                 **DEFAULT_CANCELLATION,
@@ -267,6 +291,7 @@ class HotelBookingSerializer(serializers.ModelSerializer):
     userId = serializers.UUIDField(source='user_id', read_only=True)
     guestName = serializers.CharField(source='guest_name', read_only=True)
     guestPhone = serializers.CharField(source='guest_phone', read_only=True)
+    guestWhatsapp = serializers.SerializerMethodField()
     guestEmail = serializers.CharField(source='guest_email', read_only=True, allow_blank=True)
     checkIn = serializers.DateField(source='check_in', read_only=True)
     checkOut = serializers.DateField(source='check_out', read_only=True)
@@ -292,6 +317,7 @@ class HotelBookingSerializer(serializers.ModelSerializer):
             'userId',
             'guestName',
             'guestPhone',
+            'guestWhatsapp',
             'guestEmail',
             'checkIn',
             'checkOut',
@@ -311,6 +337,9 @@ class HotelBookingSerializer(serializers.ModelSerializer):
             'updatedAt',
         )
         read_only_fields = fields
+
+    def get_guestWhatsapp(self, obj) -> str:
+        return getattr(obj.user, 'whatsapp_number', '') or ''
 
     def get_totalAmount(self, obj):
         return _money(obj.total_amount)

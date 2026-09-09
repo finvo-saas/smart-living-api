@@ -252,3 +252,157 @@ class PaymentWebhookEvent(UUIDModel, TimestampedModel):
 
     def __str__(self):
         return f'{self.gateway}:{self.gateway_event_id}'
+
+
+class CollectionMode(models.TextChoices):
+    """How rent/dues money moves — platform never holds money by default."""
+
+    MANUAL = 'manual', 'Manual ledger (owner collects)'
+    OWNER_GATEWAY = 'owner_gateway', 'Owner merchant gateway'
+    PLATFORM_COLLECT = 'platform_collect', 'Platform collects (opt-in managed)'
+
+
+class PaymentClaimStatus(models.TextChoices):
+    PENDING = 'pending', 'Pending'
+    CONFIRMED = 'confirmed', 'Confirmed'
+    REJECTED = 'rejected', 'Rejected'
+
+
+class OwnerCollectionSettings(UUIDModel, TimestampedModel):
+    """Owner payment instructions + collection mode (BD: owner holds the money)."""
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='collection_settings',
+    )
+    collection_mode = models.CharField(
+        max_length=32,
+        choices=CollectionMode.choices,
+        default=CollectionMode.MANUAL,
+        db_index=True,
+    )
+    platform_collect_enabled = models.BooleanField(
+        default=False,
+        help_text='Opt-in managed collect (hotels/NRB). Never default for mess/flats.',
+    )
+    bkash_number = models.CharField(max_length=32, blank=True, default='')
+    nagad_number = models.CharField(max_length=32, blank=True, default='')
+    rocket_number = models.CharField(max_length=32, blank=True, default='')
+    bank_name = models.CharField(max_length=120, blank=True, default='')
+    bank_account_number = models.CharField(max_length=64, blank=True, default='')
+    bank_account_name = models.CharField(max_length=120, blank=True, default='')
+    payment_note = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'payments_owner_collection_settings'
+
+    def __str__(self):
+        return f'CollectionSettings({self.owner_id})'
+
+
+class OwnerGatewayCredential(UUIDModel, TimestampedModel):
+    """Owner's own merchant credentials — settlements go to the owner, not the platform."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='gateway_credentials',
+    )
+    gateway = models.CharField(max_length=20, choices=PaymentGateway.choices)
+    display_name = models.CharField(max_length=120, blank=True, default='')
+    merchant_number = models.CharField(max_length=64, blank=True, default='')
+    credentials = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Merchant API keys (never expose full secrets to clients).',
+    )
+    is_active = models.BooleanField(default=True)
+    is_sandbox = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'payments_owner_gateway_credential'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner', 'gateway'],
+                name='unique_owner_gateway_credential',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.owner_id}:{self.gateway}'
+
+
+class PaymentClaim(UUIDModel, TimestampedModel):
+    """Tenant/member says “I paid” — owner confirms before ledger credit."""
+
+    bill = models.ForeignKey(
+        'billing.Bill',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='payment_claims',
+    )
+    mess = models.ForeignKey(
+        'mess.Mess',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='payment_claims',
+    )
+    student = models.ForeignKey(
+        'mess.MessStudent',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='payment_claims',
+    )
+    claimed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='payment_claims_made',
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    payment_method = models.CharField(max_length=20, choices=PaymentMethod.choices)
+    transaction_id = models.CharField(max_length=128, blank=True, default='')
+    note = models.TextField(blank=True, default='')
+    status = models.CharField(
+        max_length=20,
+        choices=PaymentClaimStatus.choices,
+        default=PaymentClaimStatus.PENDING,
+        db_index=True,
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_claims_reviewed',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, default='')
+    payment_transaction = models.ForeignKey(
+        PaymentTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='source_claims',
+    )
+    member_deposit = models.ForeignKey(
+        'mess.MemberDeposit',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='source_claims',
+    )
+
+    class Meta:
+        db_table = 'payments_payment_claim'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'Claim {self.amount} ({self.status})'

@@ -335,7 +335,7 @@ class PushTestView(APIView):
             )
         result = notify_user(
             request.user,
-            title='Smart Living',
+            title='SmartBasa',
             body='Push notifications are working on this device.',
             url='/notifications',
             tag='push-test',

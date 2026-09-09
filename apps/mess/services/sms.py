@@ -1,4 +1,4 @@
-"""Bulk SMS stub for mess notifications."""
+"""Bulk SMS via platform BulkSMSBD + owner credit wallet."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import logging
 from decimal import Decimal
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from accounts.services.sms import send_sms
@@ -19,6 +20,7 @@ from mess.models import (
     SMSStatus,
     SMSTemplate,
 )
+from mess.services.sms_credits import assert_can_send, debit_credits, unit_price_bdt
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,14 @@ def resolve_recipients(mess: Mess, data: dict) -> list[dict]:
         recipients = [_student_recipient(s) for s in students]
 
     elif recipient_type in (SMSRecipientType.INDIVIDUAL, SMSRecipientType.CUSTOM):
-        student_ids = data.get('studentIds') or []
+        raw = data.get('studentIds') or data.get('recipients') or []
+        student_ids = []
+        for item in raw:
+            if isinstance(item, dict):
+                student_ids.append(item.get('studentId') or item.get('id'))
+            else:
+                student_ids.append(item)
+        student_ids = [str(x) for x in student_ids if x]
         students = MessStudent.objects.filter(
             pk__in=student_ids,
             mess=mess,
@@ -74,6 +83,7 @@ def resolve_recipients(mess: Mess, data: dict) -> list[dict]:
     return recipients
 
 
+@transaction.atomic
 def send_bulk_sms(mess: Mess, user, data: dict) -> SMSMessage:
     content = data.get('content', '').strip()
     if not content:
@@ -91,8 +101,17 @@ def send_bulk_sms(mess: Mess, user, data: dict) -> SMSMessage:
 
     recipients = resolve_recipients(mess, data)
     total = len(recipients)
+    # Reserve credits for all intended recipients before hitting the gateway
+    assert_can_send(user, total)
+
     successful = 0
     failed = 0
+    provider = (getattr(settings, 'SMS_PROVIDER', 'console') or 'console').lower()
+    gateway_label = (
+        'system:bulksmsbd'
+        if provider in ('bulksmsbd', 'bulksms', 'bulksmsbd.net')
+        else f'system:{provider or "console"}'
+    )
 
     message = SMSMessage.objects.create(
         mess=mess,
@@ -103,8 +122,12 @@ def send_bulk_sms(mess: Mess, user, data: dict) -> SMSMessage:
         total_recipients=total,
         status=SMSStatus.PENDING,
         sent_by=user,
-        gateway=data.get('gateway', '') or getattr(settings, 'SMS_PROVIDER', 'console'),
-        metadata=data.get('metadata', {}) or {},
+        gateway=gateway_label,
+        metadata={
+            **(data.get('metadata') or {}),
+            'systemGateway': True,
+            'unitPriceBdt': float(unit_price_bdt()),
+        },
     )
 
     for recipient in recipients:
@@ -119,13 +142,25 @@ def send_bulk_sms(mess: Mess, user, data: dict) -> SMSMessage:
             logger.warning('SMS failed for %s: %s', phone, exc)
             failed += 1
 
+    # Debit only successful deliveries from owner wallet
+    if successful > 0:
+        debit_credits(
+            user,
+            successful,
+            mess=mess,
+            sms_message=message,
+            note=f'Bulk SMS to {successful}/{total} recipients',
+        )
+
     message.successful = successful
     message.failed = failed
     message.status = SMSStatus.SENT if successful > 0 else SMSStatus.FAILED
     message.sent_at = timezone.now()
-    message.cost = Decimal('0.50') * successful
+    message.cost = unit_price_bdt() * successful
     if failed == total and total > 0:
         message.error_message = 'All recipients failed.'
+    elif total == 0:
+        message.error_message = 'No recipients.'
     message.save()
 
     return message

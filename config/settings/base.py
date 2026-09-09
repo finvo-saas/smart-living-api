@@ -1,5 +1,5 @@
 """
-Base Django settings for Smart Living API.
+Base Django settings for SmartBasa API.
 See docs/BACKEND_DESIGN.md in the frontend repo for architecture.
 """
 import os
@@ -146,7 +146,7 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -264,31 +264,56 @@ OTP_RATE_LIMIT_ENABLED = _env_bool('OTP_RATE_LIMIT_ENABLED', True)
 OTP_RATE_LIMIT = int(os.environ.get('OTP_RATE_LIMIT', '5'))
 OTP_RATE_WINDOW_SECONDS = int(os.environ.get('OTP_RATE_WINDOW_SECONDS', '3600'))
 
-# DigitalOcean Spaces (preferred) or S3/MinIO fallback
-AWS_ACCESS_KEY_ID = (
-    os.environ.get('DO_ACCESS_KEY', '').strip()
-    or os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
+# ---------------------------------------------------------------------------
+# Object storage — DigitalOcean Spaces today, any S3-compatible provider later.
+# Both env naming schemes are accepted (DO_SPACES_* as used by the frontend env
+# and the shorter DO_* names) so one set of credentials can be pasted anywhere.
+# Application code never reads these; it goes through core.services.media.
+# ---------------------------------------------------------------------------
+def _env_first(*names: str, default: str = '') -> str:
+    for name in names:
+        value = os.environ.get(name, '').strip()
+        if value:
+            return value
+    return default
+
+
+STORAGE_PROVIDER = _env_first('STORAGE_PROVIDER', default='digitalocean').lower()
+AWS_ACCESS_KEY_ID = _env_first(
+    'DO_SPACES_KEY',
+    'DO_ACCESS_KEY',
+    'AWS_ACCESS_KEY_ID',
 )
-AWS_SECRET_ACCESS_KEY = (
-    os.environ.get('DO_SECRET_KEY', '').strip()
-    or os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
+AWS_SECRET_ACCESS_KEY = _env_first(
+    'DO_SPACES_SECRET',
+    'DO_SECRET_KEY',
+    'AWS_SECRET_ACCESS_KEY',
 )
-AWS_STORAGE_BUCKET_NAME = (
-    os.environ.get('DO_BUCKET', '').strip()
-    or os.environ.get('AWS_STORAGE_BUCKET_NAME', '').strip()
+AWS_STORAGE_BUCKET_NAME = _env_first(
+    'DO_SPACES_BUCKET',
+    'DO_BUCKET',
+    'AWS_STORAGE_BUCKET_NAME',
 )
 AWS_S3_ENDPOINT_URL = (
-    os.environ.get('DO_ENDPOINT', '').strip()
-    or os.environ.get('AWS_S3_ENDPOINT_URL', '').strip()
-    or None
+    _env_first('DO_SPACES_ENDPOINT', 'DO_ENDPOINT', 'AWS_S3_ENDPOINT_URL') or None
 )
-AWS_S3_REGION_NAME = (
-    os.environ.get('DO_REGION', '').strip()
-    or os.environ.get('AWS_S3_REGION_NAME', 'sgp1')
+AWS_S3_REGION_NAME = _env_first(
+    'DO_SPACES_REGION',
+    'DO_REGION',
+    'AWS_S3_REGION_NAME',
+    default='sgp1',
 )
-_do_url = os.environ.get('DO_URL', '').strip().rstrip('/')
+# Public objects are served from the CDN edge when a CDN URL is set, and from
+# the origin Space otherwise. Private objects always use signed origin URLs.
+STORAGE_PUBLIC_BASE_URL = _env_first(
+    'STORAGE_CDN_URL',
+    'DO_SPACES_CDN_URL',
+    'DO_CDN_URL',
+    'DO_SPACES_URL',
+    'DO_URL',
+).rstrip('/')
 AWS_S3_CUSTOM_DOMAIN = (
-    _do_url.replace('https://', '').replace('http://', '') or None
+    STORAGE_PUBLIC_BASE_URL.replace('https://', '').replace('http://', '') or None
 )
 AWS_S3_URL_PROTOCOL = 'https:'
 AWS_S3_USE_SSL = True
@@ -296,14 +321,18 @@ AWS_S3_SIGNATURE_VERSION = 's3v4'
 AWS_S3_ADDRESSING_STYLE = 'virtual'
 AWS_S3_FILE_OVERWRITE = False
 AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
-AWS_LOCATION = (
-    os.environ.get('ROOT_FOLDER', 'smart-living').strip().strip('/')
-    or 'smart-living'
-)
+# Root folder every upload lives under; per-area subfolders come from
+# core.services.media.KIND_RULES.
+STORAGE_ROOT_FOLDER = _env_first(
+    'STORAGE_ROOT_FOLDER',
+    'ROOT_FOLDER',
+    default='smart-living-system',
+).strip('/')
+AWS_LOCATION = STORAGE_ROOT_FOLDER
 # S3-compatible object storage (DigitalOcean Spaces today; AWS S3 later).
 # Same backends — change credentials/endpoint, not application code.
 # AWS S3: set AWS_* and leave DO_* / AWS_S3_ENDPOINT_URL empty.
-USE_OBJECT_STORAGE = bool(
+USE_OBJECT_STORAGE = STORAGE_PROVIDER != 'local' and bool(
     AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_STORAGE_BUCKET_NAME
 )
 
@@ -394,11 +423,11 @@ SIMPLE_JWT = {
 
 # OTP — fixed DEBUG code only when SMS is console/fallback (leave empty for random)
 OTP_DEV_FIXED_CODE = os.environ.get('OTP_DEV_FIXED_CODE', '').strip()
-OTP_SMS_PREFIX = os.environ.get('OTP_SMS_PREFIX', 'SmartLiving').strip() or 'SmartLiving'
+OTP_SMS_PREFIX = os.environ.get('OTP_SMS_PREFIX', 'SmartBasa').strip() or 'SmartBasa'
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Smart Living API',
-    'DESCRIPTION': 'REST API for Smart Living System (Bangladesh rental platform)',
+    'TITLE': 'SmartBasa API',
+    'DESCRIPTION': 'REST API for SmartBasa (Bangladesh rental platform)',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
@@ -420,7 +449,7 @@ VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '').strip()
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '').strip()
 VAPID_SUBJECT = os.environ.get(
     'VAPID_SUBJECT',
-    'mailto:support@smartliving.local',
+    'mailto:support@smartbasa.local',
 ).strip()
 
 # AI matching — optional OpenAI-compatible LLM (falls back to Bangla/English rules)
@@ -439,7 +468,7 @@ CIMS_ENFORCE_BOOKING = _env_bool('CIMS_ENFORCE_BOOKING', True)
 GEOCODER_PROVIDER = os.environ.get('GEOCODER_PROVIDER', 'nominatim').strip().lower()
 GEOCODER_CONTACT_EMAIL = os.environ.get(
     'GEOCODER_CONTACT_EMAIL',
-    'support@smartliving.local',
+    'support@smartbasa.local',
 ).strip()
 MAPBOX_ACCESS_TOKEN = os.environ.get('MAPBOX_ACCESS_TOKEN', '').strip()
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '').strip()
@@ -450,7 +479,7 @@ EMAIL_NOTIFY_ENABLED = _env_bool('EMAIL_NOTIFY_ENABLED', True)
 SMS_NOTIFY_ENABLED = _env_bool('SMS_NOTIFY_ENABLED', False)
 DEFAULT_FROM_EMAIL = os.environ.get(
     'DEFAULT_FROM_EMAIL',
-    'Smart Living <noreply@smartliving.local>',
+    'SmartBasa <noreply@smartbasa.local>',
 )
 
 BKASH_APP_KEY = os.environ.get('BKASH_APP_KEY', '')
@@ -475,7 +504,7 @@ SMS_API_KEY = (
     os.environ.get('BULKSMSBD_API_KEY', '').strip()
     or os.environ.get('SMS_API_KEY', '').strip()
 )
-SMS_SENDER_ID = os.environ.get('SMS_SENDER_ID', 'SmartLiving').strip()
+SMS_SENDER_ID = os.environ.get('SMS_SENDER_ID', 'SmartBasa').strip()
 BULKSMSBD_API_URL = os.environ.get(
     'BULKSMSBD_API_URL',
     'http://bulksmsbd.net/api/smsapi',
@@ -483,6 +512,11 @@ BULKSMSBD_API_URL = os.environ.get(
 BULKSMSBD_API_SECRET = os.environ.get('BULKSMSBD_API_SECRET', '').strip()
 BULKSMSBD_API_SENDER = os.environ.get('BULKSMSBD_API_SENDER', '').strip()
 BULKSMSBD_API_SENDER_ID = os.environ.get('BULKSMSBD_API_SENDER_ID', '').strip()
+# Owner SMS credit quotas (platform sells credits; gateway is system-owned)
+SMS_FREE_QUOTA_FREE = int(os.environ.get('SMS_FREE_QUOTA_FREE', '20'))
+SMS_FREE_QUOTA_BASIC = int(os.environ.get('SMS_FREE_QUOTA_BASIC', '100'))
+SMS_FREE_QUOTA_PREMIUM = int(os.environ.get('SMS_FREE_QUOTA_PREMIUM', '500'))
+SMS_CREDIT_UNIT_PRICE_BDT = float(os.environ.get('SMS_CREDIT_UNIT_PRICE_BDT', '0.50'))
 
 LOGGING = {
     'version': 1,

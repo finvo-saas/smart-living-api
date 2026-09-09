@@ -1,6 +1,26 @@
 from rest_framework import serializers
 
+from core.services.media import media_storage
 from documents.models import AgreementRenewal, Checklist, RentalAgreement
+
+
+def _document_url(obj, request=None) -> str:
+    """Signed URL for a privately stored document, else the external link."""
+    if obj.document_key:
+        return media_storage.signed_url(obj.document_key, request=request)
+    return obj.document_url or ''
+
+
+class DocumentKeyField(serializers.CharField):
+    """Storage key returned by an upload, restricted to the documents folder."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault('required', False)
+        kwargs.setdefault('allow_blank', True)
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        return media_storage.ensure_key(super().to_internal_value(data), 'document')
 
 
 def _money(value) -> float:
@@ -40,7 +60,8 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
         max_digits=12,
         decimal_places=2,
     )
-    documentUrl = serializers.CharField(source='document_url', allow_blank=True)
+    documentKey = serializers.CharField(source='document_key', read_only=True)
+    documentUrl = serializers.SerializerMethodField()
     documentName = serializers.CharField(source='document_name', allow_blank=True)
     documentSize = serializers.IntegerField(source='document_size')
     uploadedAt = serializers.SerializerMethodField()
@@ -70,6 +91,7 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
             'endDate',
             'monthlyRent',
             'securityDeposit',
+            'documentKey',
             'documentUrl',
             'documentName',
             'documentSize',
@@ -90,6 +112,9 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
 
     def get_flatId(self, obj) -> str | None:
         return str(obj.flat_id) if obj.flat_id else None
+
+    def get_documentUrl(self, obj) -> str:
+        return _document_url(obj, self.context.get('request'))
 
     def get_uploadedAt(self, obj) -> str:
         return _dt_str(obj.created_at) or ''
@@ -138,6 +163,7 @@ class RentalAgreementWriteSerializer(serializers.Serializer):
         max_digits=12,
         decimal_places=2,
     )
+    documentKey = DocumentKeyField(source='document_key')
     documentUrl = serializers.URLField(required=False, allow_blank=True, source='document_url')
     documentName = serializers.CharField(required=False, allow_blank=True, source='document_name')
     documentSize = serializers.IntegerField(required=False, default=0, source='document_size')
@@ -172,7 +198,8 @@ class AgreementRenewalSerializer(serializers.ModelSerializer):
         allow_null=True,
         required=False,
     )
-    documentUrl = serializers.CharField(source='document_url', allow_blank=True)
+    documentKey = serializers.CharField(source='document_key', read_only=True)
+    documentUrl = serializers.SerializerMethodField()
     renewedAt = serializers.SerializerMethodField()
     renewedBy = serializers.CharField(source='renewed_by', allow_blank=True)
 
@@ -184,10 +211,14 @@ class AgreementRenewalSerializer(serializers.ModelSerializer):
             'newStartDate',
             'newEndDate',
             'newMonthlyRent',
+            'documentKey',
             'documentUrl',
             'renewedAt',
             'renewedBy',
         ]
+
+    def get_documentUrl(self, obj) -> str:
+        return _document_url(obj, self.context.get('request'))
 
     def get_renewedAt(self, obj) -> str:
         return _dt_str(obj.created_at) or ''
@@ -209,6 +240,7 @@ class AgreementRenewalWriteSerializer(serializers.Serializer):
         max_digits=12,
         decimal_places=2,
     )
+    documentKey = DocumentKeyField(source='document_key')
     documentUrl = serializers.URLField(required=False, allow_blank=True, source='document_url')
     renewedBy = serializers.CharField(required=False, allow_blank=True, source='renewed_by')
 

@@ -1,3 +1,4 @@
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -7,6 +8,8 @@ from rest_framework.views import APIView
 from accounts.models import Role
 from core.envelope import api_success
 from core.exceptions import ForbiddenError, NotFoundError
+from hotels.models import HotelBooking
+from mess.models import MessStudent
 from portfolio.models import Tenancy, TenancyStatus
 from support.models import Complaint, ComplaintStatus
 from support.serializers import (
@@ -28,10 +31,36 @@ def _get_complaint(pk):
 
 
 def _tenant_user_ids_for_owner(owner):
-    return Tenancy.objects.filter(
-        flat__building__owner=owner,
-        status=TenancyStatus.ACTIVE,
-    ).values_list('tenant_id', flat=True)
+    """Every platform user an owner is responsible for, across all verticals."""
+    tenant_ids = set(
+        Tenancy.objects.filter(
+            flat__building__owner=owner,
+            status=TenancyStatus.ACTIVE,
+        ).values_list('tenant_id', flat=True),
+    )
+    tenant_ids.update(
+        MessStudent.objects.filter(
+            mess__owner=owner,
+            is_active=True,
+            is_deleted=False,
+            user__isnull=False,
+        ).values_list('user_id', flat=True),
+    )
+    tenant_ids.update(
+        HotelBooking.objects.filter(
+            hotel__owner=owner,
+            is_deleted=False,
+        ).values_list('user_id', flat=True),
+    )
+    tenant_ids.discard(None)
+    return tenant_ids
+
+
+def _owner_complaints_qs(owner):
+    """An owner sees their own complaints plus those raised by their renters."""
+    return _complaint_qs().filter(
+        Q(user_id__in=_tenant_user_ids_for_owner(owner)) | Q(user=owner),
+    )
 
 
 class ComplaintListCreateView(APIView):
@@ -41,11 +70,11 @@ class ComplaintListCreateView(APIView):
         user = request.user
         owner_view = request.query_params.get('ownerView') in ('1', 'true', 'True')
 
-        if owner_view and user.role in (Role.OWNER, Role.ADMIN):
-            qs = _complaint_qs()
+        if user.role == Role.ADMIN:
+            qs = _complaint_qs() if owner_view else _complaint_qs().filter(user=user)
         elif user.role == Role.OWNER:
-            tenant_ids = _tenant_user_ids_for_owner(user)
-            qs = _complaint_qs().filter(user_id__in=tenant_ids)
+            # ownerView never widens scope beyond the owner's own renters.
+            qs = _owner_complaints_qs(user)
         else:
             qs = _complaint_qs().filter(user=user)
 
@@ -68,8 +97,12 @@ class ComplaintStatusUpdateView(APIView):
     def patch(self, request, pk):
         complaint = _get_complaint(pk)
         user = request.user
-        is_staff = user.role in (Role.OWNER, Role.ADMIN)
         is_creator = complaint.user_id == user.id
+        is_managing_owner = (
+            user.role == Role.OWNER
+            and complaint.user_id in _tenant_user_ids_for_owner(user)
+        )
+        is_staff = user.role == Role.ADMIN or is_managing_owner
 
         if not is_staff and not is_creator:
             raise ForbiddenError('You cannot update this complaint.')

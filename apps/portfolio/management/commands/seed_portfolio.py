@@ -30,11 +30,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         ensure_default_plans()
 
-        owner_phone = '+8801712345678'
+        owner_phone = '+8801712345680'
         owner, created = User.objects.get_or_create(
             phone=owner_phone,
             defaults={
-                'name': 'Abdul Karim',
+                'name': 'Karim Hossain',
                 'role': Role.OWNER,
                 'is_phone_verified': True,
                 'role_selected': True,
@@ -123,6 +123,7 @@ class Command(BaseCommand):
                 'start_date': date(2024, 1, 15),
                 'tenant_name': renter.name,
                 'tenant_phone': renter.phone,
+                'tenant_whatsapp': renter.whatsapp_number or renter.phone,
                 'tenant_email': renter.email,
                 'tenant_nid': '1234567890123',
                 'tenant_address': 'Village: Shyampur, District: Dhaka',

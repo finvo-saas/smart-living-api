@@ -69,11 +69,11 @@ def _geocode_nominatim(query: str) -> dict[str, Any] | None:
             'countrycodes': 'bd',
         },
     )
-    email = getattr(settings, 'GEOCODER_CONTACT_EMAIL', '') or 'support@smartliving.local'
+    email = getattr(settings, 'GEOCODER_CONTACT_EMAIL', '') or 'support@smartbasa.local'
     req = urllib.request.Request(
         f'https://nominatim.openstreetmap.org/search?{params}',
         headers={
-            'User-Agent': f'SmartLivingSystem/1.0 ({email})',
+            'User-Agent': f'SmartBasa/1.0 ({email})',
             'Accept': 'application/json',
         },
         method='GET',

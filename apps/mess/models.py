@@ -39,6 +39,16 @@ class NoticeCategory(models.TextChoices):
     OTHER = 'other', 'Other'
 
 
+class OccupantType(models.TextChoices):
+    """A mess seat can be taken by anyone, not only university students."""
+
+    STUDENT = 'student', 'Student'
+    JOB_HOLDER = 'job_holder', 'Job holder'
+    BUSINESS = 'business', 'Business'
+    FAMILY = 'family', 'Family'
+    OTHER = 'other', 'Other'
+
+
 class AttendanceStatus(models.TextChoices):
     PRESENT = 'present', 'Present'
     ABSENT = 'absent', 'Absent'
@@ -189,6 +199,14 @@ class Mess(UUIDModel, TimestampedModel):
     # Utility profiles for reliability scores
     water_profile = models.JSONField(default=dict, blank=True)
     electricity_profile = models.JSONField(default=dict, blank=True)
+    # Owner payment instructions (override account-level defaults when set)
+    bkash_number = models.CharField(max_length=32, blank=True, default='')
+    nagad_number = models.CharField(max_length=32, blank=True, default='')
+    rocket_number = models.CharField(max_length=32, blank=True, default='')
+    bank_name = models.CharField(max_length=120, blank=True, default='')
+    bank_account_number = models.CharField(max_length=64, blank=True, default='')
+    bank_account_name = models.CharField(max_length=120, blank=True, default='')
+    payment_note = models.TextField(blank=True, default='')
 
     class Meta:
         db_table = 'mess_mess'
@@ -260,9 +278,34 @@ class MessStudent(UUIDModel, TimestampedModel):
     )
     name = models.CharField(max_length=255)
     phone = models.CharField(max_length=20)
+    whatsapp_number = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        help_text='WhatsApp number for owner-to-renter messaging.',
+    )
     email = models.EmailField(blank=True, default='')
+    occupant_type = models.CharField(
+        max_length=20,
+        choices=OccupantType.choices,
+        default=OccupantType.STUDENT,
+        db_index=True,
+    )
+    photo_url = models.URLField(blank=True, default='')
     student_id_code = models.CharField(max_length=64, blank=True, default='')
     university = models.CharField(max_length=255, blank=True, default='')
+    organization = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Employer or business name for non-student members.',
+    )
+    designation = models.CharField(max_length=120, blank=True, default='')
+    emergency_contact_name = models.CharField(max_length=255, blank=True, default='')
+    emergency_contact_phone = models.CharField(max_length=20, blank=True, default='')
+    nid_number = models.CharField(max_length=32, blank=True, default='')
+    permanent_address = models.CharField(max_length=255, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
     seat = models.OneToOneField(
         Seat,
         on_delete=models.SET_NULL,
@@ -272,6 +315,11 @@ class MessStudent(UUIDModel, TimestampedModel):
     )
     seat_number = models.CharField(max_length=32, blank=True, default='')
     joined_date = models.DateField()
+    left_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Set when the member moved out; history is kept for billing.',
+    )
     monthly_fee = models.DecimalField(max_digits=12, decimal_places=2)
     is_active = models.BooleanField(default=True, db_index=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
@@ -377,8 +425,12 @@ class WeeklySchedule(UUIDModel, TimestampedModel):
         on_delete=models.CASCADE,
         related_name='weekly_schedules',
     )
-    week_start_date = models.DateField()
-    week_end_date = models.DateField()
+    week_start_date = models.DateField(
+        help_text='Start of Bangladesh week (Saturday).',
+    )
+    week_end_date = models.DateField(
+        help_text='End of Bangladesh week (Friday).',
+    )
     schedule = models.JSONField(default=dict, blank=True)
     is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(
@@ -778,6 +830,12 @@ class MealOffRequest(UUIDModel, TimestampedModel):
         ordering = ('-created_at',)
 
 
+class DepositStatus(models.TextChoices):
+    CONFIRMED = 'confirmed', 'Confirmed'
+    PENDING_CLAIM = 'pending_claim', 'Pending claim'
+    REJECTED = 'rejected', 'Rejected'
+
+
 class MemberDeposit(UUIDModel, TimestampedModel):
     mess = models.ForeignKey(Mess, on_delete=models.CASCADE, related_name='member_deposits')
     student = models.ForeignKey(
@@ -788,6 +846,33 @@ class MemberDeposit(UUIDModel, TimestampedModel):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     date = models.DateField()
     note = models.CharField(max_length=255, blank=True, default='')
+    payment_method = models.CharField(
+        max_length=20,
+        blank=True,
+        default='Cash',
+        help_text='Cash / bKash / Nagad / Rocket / Bank Transfer',
+    )
+    transaction_id = models.CharField(max_length=128, blank=True, default='')
+    status = models.CharField(
+        max_length=20,
+        choices=DepositStatus.choices,
+        default=DepositStatus.CONFIRMED,
+        db_index=True,
+    )
+    claimed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mess_deposits_claimed',
+    )
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mess_deposits_confirmed',
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -870,3 +955,119 @@ class MemberMonthBill(UUIDModel, TimestampedModel):
                 name='unique_member_bill_per_close',
             ),
         ]
+
+
+class SMSCreditPackage(UUIDModel, TimestampedModel):
+    """Admin-configurable SMS credit packs sold to owners."""
+
+    package_key = models.SlugField(
+        max_length=64,
+        unique=True,
+        help_text='Stable id used by purchase API, e.g. sms-50',
+    )
+    label = models.CharField(max_length=120)
+    credits = models.PositiveIntegerField()
+    price_bdt = models.DecimalField(max_digits=12, decimal_places=2)
+    description = models.CharField(max_length=255, blank=True, default='')
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'mess_sms_credit_package'
+        ordering = ('sort_order', 'credits', 'package_key')
+
+    def __str__(self):
+        return f'{self.package_key}:{self.credits}'
+
+
+class OwnerSMSAccount(UUIDModel, TimestampedModel):
+    """Platform SMS credit wallet — owners use system BulkSMSBD, not their own API keys."""
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='sms_account',
+    )
+    balance = models.PositiveIntegerField(default=0)
+    lifetime_granted = models.PositiveIntegerField(default=0)
+    lifetime_purchased = models.PositiveIntegerField(default=0)
+    lifetime_used = models.PositiveIntegerField(default=0)
+    # Tracks which calendar month already received the plan free quota
+    free_quota_period = models.CharField(max_length=7, blank=True, default='')
+
+    class Meta:
+        db_table = 'mess_owner_sms_account'
+
+    def __str__(self):
+        return f'{self.owner_id}:sms={self.balance}'
+
+
+class SMSCreditLedger(UUIDModel, TimestampedModel):
+    class EntryType(models.TextChoices):
+        FREE_QUOTA = 'free_quota', 'Free quota'
+        PURCHASE = 'purchase', 'Purchase'
+        SEND_DEBIT = 'send_debit', 'Send debit'
+        ADJUSTMENT = 'adjustment', 'Adjustment'
+        REFUND = 'refund', 'Refund'
+
+    account = models.ForeignKey(
+        OwnerSMSAccount,
+        on_delete=models.CASCADE,
+        related_name='ledger',
+    )
+    entry_type = models.CharField(max_length=20, choices=EntryType.choices)
+    credits = models.IntegerField(help_text='Positive = credit, negative = debit')
+    balance_after = models.PositiveIntegerField(default=0)
+    note = models.CharField(max_length=255, blank=True, default='')
+    mess = models.ForeignKey(
+        Mess,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sms_ledger_entries',
+    )
+    sms_message = models.ForeignKey(
+        'SMSMessage',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='credit_ledger',
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = 'mess_sms_credit_ledger'
+        ordering = ('-created_at',)
+
+
+class SMSCreditPurchase(UUIDModel, TimestampedModel):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        PAID = 'paid', 'Paid'
+        FAILED = 'failed', 'Failed'
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='sms_credit_purchases',
+    )
+    package_id = models.CharField(max_length=64)
+    credits = models.PositiveIntegerField()
+    amount_bdt = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    paid_at = models.DateTimeField(null=True, blank=True)
+    ledger_entry = models.ForeignKey(
+        SMSCreditLedger,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='purchases',
+    )
+
+    class Meta:
+        db_table = 'mess_sms_credit_purchase'
+        ordering = ('-created_at',)
