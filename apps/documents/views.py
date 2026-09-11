@@ -51,14 +51,29 @@ class AgreementListCreateView(APIView):
         if request.user.role == Role.ADMIN:
             qs = _agreement_qs()
         elif request.user.role == Role.OWNER:
-            from listings.models import Property
+            from hotels.models import Hotel
+            from mess.models import Mess
 
-            owned = Property.objects.filter(owner=request.user).values_list(
-                'id',
-                flat=True,
+            building_ids = list(
+                Building.objects.filter(owner=request.user).values_list(
+                    'id', flat=True,
+                ),
             )
+            mess_ids = list(
+                Mess.objects.filter(owner=request.user, is_deleted=False).values_list(
+                    'id', flat=True,
+                ),
+            )
+            hotel_ids = list(
+                Hotel.objects.filter(owner=request.user, is_deleted=False).values_list(
+                    'id', flat=True,
+                ),
+            )
+            owned_scope_ids = building_ids + mess_ids + hotel_ids
             qs = _agreement_qs().filter(
-                Q(user=request.user) | Q(property_id__in=owned),
+                Q(user=request.user)
+                | Q(scope_id__in=owned_scope_ids)
+                | Q(property_id__in=building_ids),
             )
         else:
             qs = _agreement_qs().filter(user=request.user)

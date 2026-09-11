@@ -157,6 +157,61 @@ class BillDetailView(APIView):
         bill = _owner_bill(request.user, pk)
         return Response(api_success(_serialize_bill(bill)))
 
+    @transaction.atomic
+    def patch(self, request, pk):
+        """Owner edits a bill they generated (amount, due date, items, status)."""
+        if request.user.role not in ('owner', 'admin'):
+            raise ForbiddenError('Only owners can edit bills.')
+        bill = _owner_bill(request.user, pk)
+        entry = dict(request.data)
+        items_data = entry.pop('items', None)
+
+        if 'tenantName' in entry:
+            bill.tenant_name = entry['tenantName']
+        if 'flatNumber' in entry:
+            bill.flat_number = entry.get('flatNumber') or ''
+        if 'seatNumber' in entry:
+            bill.seat_number = entry.get('seatNumber') or ''
+        if 'month' in entry and entry['month']:
+            bill.month = entry['month']
+        if 'year' in entry and entry['year']:
+            bill.year = entry['year']
+        if 'amount' in entry and entry['amount'] is not None:
+            bill.amount = entry['amount']
+        if entry.get('dueDate'):
+            bill.due_date = entry['dueDate']
+        if 'paidDate' in entry:
+            bill.paid_date = entry.get('paidDate') or None
+        if 'status' in entry and entry['status']:
+            bill.status = entry['status']
+        bill.save()
+
+        if items_data is not None:
+            bill.items.all().delete()
+            for item in items_data:
+                BillItem.objects.create(
+                    bill=bill,
+                    description=item.get('description') or item.get('name') or 'Item',
+                    amount=item['amount'],
+                    type=item.get('type', 'other'),
+                    calculation_type=item.get('calculationType', ''),
+                    unit_rate=item.get('unitRate'),
+                    previous_reading=item.get('previousReading'),
+                    current_reading=item.get('currentReading'),
+                    consumption=item.get('consumption'),
+                )
+            # Keep header amount aligned with line items when amount omitted.
+            if 'amount' not in entry:
+                from django.db.models import Sum
+
+                total = bill.items.aggregate(s=Sum('amount'))['s']
+                if total is not None:
+                    bill.amount = total
+                    bill.save(update_fields=['amount', 'updated_at'])
+
+        bill = _owner_bill(request.user, bill.id)
+        return Response(api_success(_serialize_bill(bill)))
+
 
 class BillsBulkView(APIView):
     permission_classes = [IsAuthenticated]

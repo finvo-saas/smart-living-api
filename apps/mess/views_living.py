@@ -113,9 +113,16 @@ class MessEnsureListingView(APIView):
 
     def post(self, request, pk):
         mess = _get_mess(pk)
+        _assert_mess_owner(mess, request.user)
         from listings.services.inventory import ensure_listing_for_mess
 
         listing = ensure_listing_for_mess(mess)
+        try:
+            from discovery.services.geocode import ensure_property_coordinates
+
+            ensure_property_coordinates(listing)
+        except Exception:
+            pass
         mess.refresh_from_db()
         return Response(
             api_success(

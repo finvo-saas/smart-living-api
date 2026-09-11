@@ -2,7 +2,6 @@ from django.urls import path
 
 from core.views_sse import MessLiveStatusSSEView
 from mess.views import (
-    AllNoticesView,
     AttendanceBulkView,
     AttendanceListCreateView,
     AttendanceReportView,
@@ -21,15 +20,12 @@ from mess.views import (
     MessLiveStatusView,
     MessListCreateView,
     MessMyMembershipsView,
-    MessNoticesView,
     MessRuleDetailView,
     MessRuleListCreateView,
     MessSeatDetailView,
     MessSeatsView,
     MessStudentDetailView,
     MessStudentsView,
-    NoticeAcknowledgeView,
-    NoticeDetailView,
     RuleAcceptView,
     RuleViolationDetailView,
     RuleViolationListCreateView,
@@ -46,6 +42,12 @@ from mess.views import (
     OwnerSMSWalletView,
     WeeklyScheduleDetailView,
     WeeklyScheduleListCreateView,
+)
+from ops.views import (
+    MessScopeNoticeView,
+    UnifiedNoticeAckView,
+    UnifiedNoticeDetailView,
+    UnifiedNoticeFeedView,
 )
 from mess.views_living import (
     HisabCloseMonthView,
@@ -144,12 +146,12 @@ urlpatterns = [
         MessSeatDetailView.as_view(),
         name='mess-seat-detail',
     ),
-    path('mess/<uuid:pk>/notices/', MessNoticesView.as_view(), name='mess-notices'),
-    path('notices/', AllNoticesView.as_view(), name='notices-all'),
-    path('notices/<uuid:notice_id>/', NoticeDetailView.as_view(), name='notice-detail'),
+    path('mess/<uuid:pk>/notices/', MessScopeNoticeView.as_view(), name='mess-notices'),
+    path('notices/', UnifiedNoticeFeedView.as_view(), name='notices-all'),
+    path('notices/<uuid:notice_id>/', UnifiedNoticeDetailView.as_view(), name='notice-detail'),
     path(
         'notices/<uuid:notice_id>/acknowledge/',
-        NoticeAcknowledgeView.as_view(),
+        UnifiedNoticeAckView.as_view(),
         name='notice-acknowledge',
     ),
     path(

@@ -368,6 +368,74 @@ class FlatEnsureListingView(APIView):
         )
 
 
+class FlatUpdateTenancyView(APIView):
+    """PATCH active tenancy details on an occupied flat (owner-created assign)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        _require_owner(request.user)
+        flat = _owner_flat(request.user, pk)
+        tenancy = (
+            Tenancy.objects.filter(flat=flat, status=TenancyStatus.ACTIVE)
+            .select_related('tenant')
+            .first()
+        )
+        if not tenancy:
+            raise InvalidError('No active tenancy for this flat.')
+
+        serializer = AssignRenterSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        updates = []
+        if 'name' in data:
+            tenancy.tenant_name = data['name'].strip()
+            updates.append('tenant_name')
+        if 'phone' in data:
+            tenancy.tenant_phone = normalize_bd_phone(data['phone'])
+            updates.append('tenant_phone')
+        if 'whatsapp' in data:
+            tenancy.tenant_whatsapp = data.get('whatsapp') or ''
+            updates.append('tenant_whatsapp')
+        if 'email' in data:
+            tenancy.tenant_email = data.get('email') or ''
+            updates.append('tenant_email')
+        if 'nid' in data:
+            tenancy.tenant_nid = data.get('nid') or ''
+            updates.append('tenant_nid')
+        if 'address' in data:
+            tenancy.tenant_address = data.get('address') or ''
+            updates.append('tenant_address')
+        if 'deposit' in data:
+            tenancy.deposit = data.get('deposit')
+            updates.append('deposit')
+        if 'notes' in data:
+            tenancy.notes = (data.get('notes') or '').strip()
+            updates.append('notes')
+        if 'joinedDate' in data and data.get('joinedDate'):
+            tenancy.start_date = data['joinedDate']
+            updates.append('start_date')
+
+        if updates:
+            tenancy.save(update_fields=[*updates, 'updated_at'])
+
+        # Keep linked user profile snapshots in sync when phone/name change.
+        tenant = tenancy.tenant
+        user_updates = []
+        if 'name' in data and data['name'].strip() and not tenant.name:
+            tenant.name = data['name'].strip()
+            user_updates.append('name')
+        if 'whatsapp' in data and data.get('whatsapp'):
+            tenant.whatsapp_number = data['whatsapp']
+            user_updates.append('whatsapp_number')
+        if user_updates:
+            tenant.save(update_fields=[*user_updates, 'updated_at'])
+
+        return Response(api_success(_serialize_flat(flat)))
+
+
 class FlatAssignRenterView(APIView):
     permission_classes = [IsAuthenticated]
 

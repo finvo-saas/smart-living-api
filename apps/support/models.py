@@ -3,12 +3,20 @@ from django.db import models
 from django.utils import timezone
 
 from core.models import TimestampedModel, UUIDModel
+from core.scope import ScopeType
 
 
 class ComplaintStatus(models.TextChoices):
     OPEN = 'open', 'Open'
     IN_PROGRESS = 'in_progress', 'In Progress'
     RESOLVED = 'resolved', 'Resolved'
+
+
+class ComplaintCategory(models.TextChoices):
+    MAINTENANCE = 'maintenance', 'Maintenance'
+    BILLING = 'billing', 'Billing'
+    NOISE = 'noise', 'Noise'
+    OTHER = 'other', 'Other'
 
 
 class Complaint(UUIDModel, TimestampedModel):
@@ -27,12 +35,29 @@ class Complaint(UUIDModel, TimestampedModel):
     )
     category = models.CharField(
         max_length=20,
-        default='maintenance',
-        help_text='maintenance | billing | noise | other',
+        choices=ComplaintCategory.choices,
+        default=ComplaintCategory.MAINTENANCE,
     )
     image_url = models.URLField(blank=True, default='')
     response = models.TextField(blank=True, default='')
     resolved_at = models.DateTimeField(null=True, blank=True)
+    # Shared polymorphic scope (mess | building | hotel)
+    scope_type = models.CharField(
+        max_length=20,
+        choices=ScopeType.choices,
+        blank=True,
+        default='',
+        db_index=True,
+    )
+    scope_id = models.UUIDField(null=True, blank=True, db_index=True)
+    scope_name = models.CharField(max_length=255, blank=True, default='')
+    target_id = models.UUIDField(
+        null=True,
+        blank=True,
+        help_text='Optional Flat / seat / room UUID under the scope.',
+    )
+    target_label = models.CharField(max_length=80, blank=True, default='')
+    # Legacy apartment FKs (kept in sync when scope_type=building)
     building = models.ForeignKey(
         'portfolio.Building',
         on_delete=models.SET_NULL,
@@ -47,7 +72,7 @@ class Complaint(UUIDModel, TimestampedModel):
         blank=True,
         related_name='complaints',
     )
-    is_deleted = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         db_table = 'support_complaint'

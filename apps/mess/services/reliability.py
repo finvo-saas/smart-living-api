@@ -10,6 +10,8 @@ DEFAULT_WATER = {
     'hasFilter': False,
     'separateDrinkingWater': False,
     'hasBackup': False,
+    # Owner freeform key → value notes (shown on public utilities card).
+    'manual': {},
 }
 
 DEFAULT_ELECTRICITY = {
@@ -23,6 +25,7 @@ DEFAULT_ELECTRICITY = {
     'emergencyLight': False,
     'meterType': 'shared',
     'billSplitMethod': 'equal',
+    'manual': {},
 }
 
 _AVAIL_BASE = {
@@ -38,7 +41,17 @@ def _merge(defaults: dict, raw) -> dict:
     out = dict(defaults)
     if isinstance(raw, dict):
         for key, value in raw.items():
-            if key in out:
+            if key not in out:
+                continue
+            if key == 'manual' and isinstance(value, dict):
+                cleaned = {}
+                for mk, mv in value.items():
+                    label = str(mk).strip()
+                    if not label:
+                        continue
+                    cleaned[label] = '' if mv is None else str(mv)
+                out[key] = cleaned
+            else:
                 out[key] = value
     return out
 

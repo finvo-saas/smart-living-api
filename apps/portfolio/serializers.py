@@ -312,9 +312,9 @@ class FloorPatchSerializer(serializers.ModelSerializer):
 
 
 class AssignRenterSerializer(serializers.Serializer):
-    name = serializers.CharField()
-    phone = serializers.CharField()
-    whatsapp = WhatsAppNumberField()
+    name = serializers.CharField(required=False)
+    phone = serializers.CharField(required=False)
+    whatsapp = WhatsAppNumberField(required=False, allow_blank=True)
     email = serializers.EmailField(required=False, allow_blank=True)
     nid = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
@@ -326,6 +326,15 @@ class AssignRenterSerializer(serializers.Serializer):
         allow_null=True,
     )
     notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        # Create/assign still requires name + phone when not partial update of existing.
+        if not self.partial:
+            if not attrs.get('name'):
+                raise serializers.ValidationError({'name': 'Name is required.'})
+            if not attrs.get('phone'):
+                raise serializers.ValidationError({'phone': 'Phone is required.'})
+        return attrs
 
 
 class VacateFlatSerializer(serializers.Serializer):

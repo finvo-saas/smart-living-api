@@ -38,6 +38,17 @@ class FurnishingStatus(models.TextChoices):
     SEMI = 'semi-furnished', 'Semi-furnished'
 
 
+class PropertyFace(models.TextChoices):
+    NORTH = 'north', 'North'
+    SOUTH = 'south', 'South'
+    EAST = 'east', 'East'
+    WEST = 'west', 'West'
+    NORTH_EAST = 'north-east', 'North-East'
+    NORTH_WEST = 'north-west', 'North-West'
+    SOUTH_EAST = 'south-east', 'South-East'
+    SOUTH_WEST = 'south-west', 'South-West'
+
+
 class TenantType(models.TextChoices):
     FAMILY = 'family', 'Family'
     BACHELOR = 'bachelor', 'Bachelor'
@@ -118,10 +129,47 @@ class Property(UUIDModel, TimestampedModel):
         help_text='BHK / bedroom count for apartment listings.',
     )
     bathrooms = models.PositiveSmallIntegerField(null=True, blank=True)
+    kitchens = models.PositiveSmallIntegerField(null=True, blank=True)
+    living_rooms = models.PositiveSmallIntegerField(null=True, blank=True)
+    balconies = models.PositiveSmallIntegerField(null=True, blank=True)
     size_sqft = models.PositiveIntegerField(
         null=True,
         blank=True,
         help_text='Built-up size in square feet (not neighbourhood area).',
+    )
+    unit_number = models.CharField(
+        max_length=40,
+        blank=True,
+        default='',
+        help_text='Flat / unit number shown on public listing (e.g. A-5).',
+    )
+    property_face = models.CharField(
+        max_length=20,
+        choices=PropertyFace.choices,
+        null=True,
+        blank=True,
+        help_text='Primary facing direction (Bproperty-style overview).',
+    )
+    service_charge = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly service charge in BDT (in addition to rent).',
+    )
+    parking_count = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text='Number of parking spaces included.',
+    )
+    available_from = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Move-in / availability date.',
+    )
+    rent_negotiable = models.BooleanField(
+        default=False,
+        help_text='Whether advertised rent is negotiable.',
     )
     tenant_type = models.CharField(
         max_length=20,

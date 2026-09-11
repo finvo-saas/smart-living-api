@@ -27,6 +27,7 @@ from payments.models import (
     ScheduledPaymentStatus,
 )
 from portfolio.models import Building, Flat, FlatStatus, Floor, Tenancy, TenancyStatus
+from portfolio.services.seed_buildings import ensure_building
 from billing.models import Bill, BillItem, BillItemType, BillStatus, PropertyKind
 from billing.services.generation import default_due_date
 from subscriptions.models import FeaturedBoost, PlanTier
@@ -95,7 +96,7 @@ class Command(BaseCommand):
         if not owner or not sadia:
             return
 
-        building, _ = Building.objects.update_or_create(
+        building, _ = ensure_building(
             owner=owner,
             name='Uttara Lake View',
             defaults={

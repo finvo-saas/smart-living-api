@@ -20,7 +20,9 @@ from billing.models import (
     PropertyKind,
 )
 from billing.services.generation import default_due_date
+from core.seed_catalog import APT_OWNER_PHONES, ensure_user, resolve_owner
 from portfolio.models import Building, Flat, FlatStatus, Floor, Tenancy, TenancyStatus
+from portfolio.services.seed_buildings import ensure_building
 from subscriptions.services import ensure_default_plans, get_or_create_owner_subscription
 
 
@@ -30,19 +32,22 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         ensure_default_plans()
 
-        owner_phone = '+8801712345680'
-        owner, created = User.objects.get_or_create(
-            phone=owner_phone,
-            defaults={
-                'name': 'Karim Hossain',
-                'role': Role.OWNER,
-                'is_phone_verified': True,
-                'role_selected': True,
-            },
-        )
-        if not created and owner.role != Role.OWNER:
-            owner.role = Role.OWNER
-            owner.save(update_fields=['role', 'updated_at'])
+        # Prefer product remapped phone (+8801917161305) when it exists.
+        for phone in reversed(APT_OWNER_PHONES):
+            ensure_user(
+                phone=phone,
+                name='Karim Hossain',
+                role=Role.OWNER,
+                email='karim.hossain@smartbasa.com',
+            )
+        owner = resolve_owner(*APT_OWNER_PHONES)
+        if not owner:
+            owner = ensure_user(
+                phone=APT_OWNER_PHONES[-1],
+                name='Karim Hossain',
+                role=Role.OWNER,
+                email='karim.hossain@smartbasa.com',
+            )
 
         UserProfile.objects.get_or_create(user=owner)
         sub = get_or_create_owner_subscription(owner)
@@ -65,7 +70,7 @@ class Command(BaseCommand):
         )
         UserProfile.objects.get_or_create(user=renter)
 
-        building, _ = Building.objects.update_or_create(
+        building, _ = ensure_building(
             owner=owner,
             name='Green Valley',
             defaults={
@@ -214,7 +219,7 @@ class Command(BaseCommand):
             type=BillItemType.UTILITY,
         )
 
-        self.stdout.write(self.style.SUCCESS('Seed complete — IDs:'))
+        self.stdout.write(self.style.SUCCESS('Seed complete - IDs:'))
         self.stdout.write(f'  owner_id={owner.id}')
         self.stdout.write(f'  renter_id={renter.id}')
         self.stdout.write(f'  building_id={building.id}')

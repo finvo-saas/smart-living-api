@@ -104,7 +104,7 @@ class Command(BaseCommand):
             booking.save()
             if was_created:
                 created += 1
-            self.stdout.write(f'  {booking.property_name} → {booking.id} ({booking.status})')
+            self.stdout.write(f'  {booking.property_name} -> {booking.id} ({booking.status})')
 
         self.stdout.write(
             self.style.SUCCESS(f'Seeded bookings complete ({created} new).'),

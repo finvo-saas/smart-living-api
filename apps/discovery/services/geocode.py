@@ -1,6 +1,7 @@
 """Address → coordinates via Nominatim (default) or Mapbox / Google."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import urllib.error
@@ -28,7 +29,9 @@ def geocode_address(
     if len(query) < 5:
         return None
 
-    cache_key = f'geocode:v1:{query.lower()}'
+    # Memcached forbids spaces/commas/control chars in keys — hash the query.
+    digest = hashlib.sha256(query.lower().encode('utf-8')).hexdigest()[:32]
+    cache_key = f'geocode:v1:{digest}'
     cached = cache.get(cache_key)
     if cached is not None:
         return cached

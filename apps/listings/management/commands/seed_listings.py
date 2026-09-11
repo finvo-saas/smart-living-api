@@ -7,7 +7,12 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from accounts.models import Role, User, UserProfile
-from core.seed_catalog import EXTRA_LISTINGS
+from core.seed_catalog import (
+    APT_OWNER_PHONES,
+    EXTRA_LISTINGS,
+    MESS_OWNER_PHONES,
+    resolve_owner,
+)
 from listings.models import ListingStatus, Property, PropertyReview, VerificationStatus
 
 
@@ -66,17 +71,31 @@ SAMPLE = [
         'nearby_facilities': ['Metro Station', 'Shopping Mall', 'School'],
         'building_age': 8,
         'floor_level': 4,
+        'bedrooms': 2,
+        'bathrooms': 2,
+        'kitchens': 1,
+        'living_rooms': 1,
+        'balconies': 1,
+        'size_sqft': 1100,
+        'unit_number': '4B',
+        'property_face': 'east',
+        'service_charge': 4500,
+        'parking_count': 1,
+        'available_from': '2026-04-10',
+        'rent_negotiable': False,
+        'tenant_type': 'family',
         'furnishing': 'semi-furnished',
         'parking': True,
         'security': True,
         'verified': True,
         'deposit_months': 2,
         'description': (
-            '2 BHK apartment in prime location. Well-maintained building '
-            'with all modern facilities.'
+            '<h2>2 BHK in Uttara</h2>'
+            '<p>Well-maintained apartment in Sector 7 with lift, parking, and balcony. '
+            'Close to metro and shopping.</p>'
         ),
-        'owner_phone': '+8801712345679',
-        'owner_name': 'Fatima Begum',
+        'owner_phone': '+8801712345680',
+        'owner_name': 'Karim Hossain',
     },
     {
         'key': 'student-hub',
@@ -108,8 +127,9 @@ SAMPLE = [
             'Affordable mess near universities with lunch included. '
             'Quiet study-friendly environment for students.'
         ),
-        'owner_phone': '+8801712345680',
-        'owner_name': 'Karim Hossain',
+        # Mess vertical — Abdul Karim (not apartment Karim Hossain)
+        'owner_phone': '+8801712345678',
+        'owner_name': 'Abdul Karim',
     },
     {
         'key': 'chittagong-hostel',
@@ -179,6 +199,88 @@ SAMPLE = [
 SAMPLE = SAMPLE + EXTRA_LISTINGS
 
 
+def _owner_for_seed_item(item: dict) -> User:
+    """Prefer remapped product phones for known mess / apartment demo owners."""
+    phone = item['owner_phone']
+    name = item['owner_name']
+    if phone in MESS_OWNER_PHONES or phone == '+8801712345678':
+        existing = resolve_owner(*MESS_OWNER_PHONES)
+        if existing:
+            return existing
+    if phone in APT_OWNER_PHONES or phone == '+8801712345680':
+        existing = resolve_owner(*APT_OWNER_PHONES)
+        if existing:
+            return existing
+
+    owner, _ = User.objects.get_or_create(
+        phone=phone,
+        defaults={
+            'name': name,
+            'role': Role.OWNER,
+            'role_selected': True,
+            'is_phone_verified': True,
+            'whatsapp_number': phone,
+        },
+    )
+    if owner.role != Role.OWNER:
+        owner.role = Role.OWNER
+        owner.role_selected = True
+        owner.name = owner.name or name
+        owner.save()
+    UserProfile.objects.get_or_create(user=owner)
+    return owner
+
+
+def _reconcile_vertical_listing_owners(stdout) -> None:
+    """Apartment Karim keeps apartments only; mess listings go to Abdul Karim."""
+    mess_owner = resolve_owner(*MESS_OWNER_PHONES)
+    apt_owner = resolve_owner(*APT_OWNER_PHONES)
+    if not mess_owner or not apt_owner:
+        return
+
+    apt_users = list(
+        User.objects.filter(phone__in=APT_OWNER_PHONES),
+    )
+    # Move mess/hostel ads off apartment demo accounts
+    moved = (
+        Property.objects.filter(
+            owner__in=apt_users,
+            type__in=('mess', 'hostel'),
+        ).update(owner=mess_owner)
+    )
+    if moved:
+        stdout.write(f'  reassigned {moved} mess/hostel listing(s) -> {mess_owner.phone}')
+
+    # Deduplicate Student Hub: keep one under mess owner
+    hubs = list(
+        Property.objects.filter(name='Student Hub Mess').order_by('created_at'),
+    )
+    if hubs:
+        keep = next((p for p in hubs if p.owner_id == mess_owner.id), hubs[0])
+        if keep.owner_id != mess_owner.id:
+            keep.owner = mess_owner
+            keep.save(update_fields=['owner', 'updated_at'])
+        for dup in hubs:
+            if dup.id != keep.id:
+                dup.delete()
+                stdout.write(f'  removed duplicate Student Hub Mess ({dup.id})')
+
+    # Ensure apartment demo owns Banani + Sunshine (seed may have left Fatima copies)
+    for name in ('Banani Studio Flat', 'Sunshine Apartment'):
+        props = list(Property.objects.filter(name=name).order_by('created_at'))
+        if not props:
+            continue
+        keep = next((p for p in props if p.owner_id == apt_owner.id), props[0])
+        if keep.owner_id != apt_owner.id:
+            keep.owner = apt_owner
+            keep.save(update_fields=['owner', 'updated_at'])
+            stdout.write(f'  {name} -> {apt_owner.phone}')
+        for dup in props:
+            if dup.id != keep.id:
+                dup.delete()
+                stdout.write(f'  removed duplicate {name} ({dup.id})')
+
+
 class Command(BaseCommand):
     help = 'Seed sample properties and reviews for discovery'
 
@@ -195,21 +297,10 @@ class Command(BaseCommand):
 
         created_count = 0
         for item in SAMPLE:
-            owner, _ = User.objects.get_or_create(
-                phone=item['owner_phone'],
-                defaults={
-                    'name': item['owner_name'],
-                    'role': Role.OWNER,
-                    'role_selected': True,
-                    'is_phone_verified': True,
-                    'whatsapp_number': item['owner_phone'],
-                },
-            )
-            if owner.role != Role.OWNER:
-                owner.role = Role.OWNER
-                owner.role_selected = True
-                owner.name = owner.name or item['owner_name']
-                owner.save()
+            owner = _owner_for_seed_item(item)
+            if owner.name != item['owner_name'] and not owner.name:
+                owner.name = item['owner_name']
+                owner.save(update_fields=['name', 'updated_at'])
             UserProfile.objects.get_or_create(user=owner)
 
             prop, created = Property.objects.update_or_create(
@@ -240,6 +331,23 @@ class Command(BaseCommand):
                     'nearby_facilities': item.get('nearby_facilities') or [],
                     'building_age': item.get('building_age'),
                     'floor_level': item.get('floor_level'),
+                    'bedrooms': item.get('bedrooms'),
+                    'bathrooms': item.get('bathrooms'),
+                    'kitchens': item.get('kitchens'),
+                    'living_rooms': item.get('living_rooms'),
+                    'balconies': item.get('balconies'),
+                    'size_sqft': item.get('size_sqft'),
+                    'unit_number': item.get('unit_number', ''),
+                    'property_face': item.get('property_face'),
+                    'service_charge': (
+                        Decimal(item['service_charge'])
+                        if item.get('service_charge') is not None
+                        else None
+                    ),
+                    'parking_count': item.get('parking_count'),
+                    'available_from': item.get('available_from'),
+                    'rent_negotiable': item.get('rent_negotiable', False),
+                    'tenant_type': item.get('tenant_type'),
                     'furnishing': item.get('furnishing'),
                     'parking': item.get('parking'),
                     'security': item.get('security'),
@@ -268,7 +376,9 @@ class Command(BaseCommand):
             )
             if created:
                 created_count += 1
-            self.stdout.write(f'  {prop.name} → {prop.id}')
+            self.stdout.write(f'  {prop.name} -> {prop.id}')
+
+        _reconcile_vertical_listing_owners(self.stdout)
 
         # Reviews from several renters so discovery is not a single demo comment.
         reviewers = [

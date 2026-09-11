@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 
 from rest_framework import serializers
@@ -11,11 +12,17 @@ from listings.models import (
     PropertyType,
 )
 
+_TAG_RE = re.compile(r'<[^>]+>')
+
 
 def _money(value) -> float:
     if value is None:
         return 0.0
     return float(value)
+
+
+def _plain_text(value: str) -> str:
+    return _TAG_RE.sub(' ', value or '').replace('&nbsp;', ' ').strip()
 
 
 class PropertySerializer(serializers.ModelSerializer):
@@ -53,9 +60,41 @@ class PropertySerializer(serializers.ModelSerializer):
     )
     bedrooms = serializers.IntegerField(allow_null=True, required=False)
     bathrooms = serializers.IntegerField(allow_null=True, required=False)
+    kitchens = serializers.IntegerField(allow_null=True, required=False)
+    livingRooms = serializers.IntegerField(
+        source='living_rooms',
+        allow_null=True,
+        required=False,
+    )
+    balconies = serializers.IntegerField(allow_null=True, required=False)
     sizeSqft = serializers.IntegerField(
         source='size_sqft',
         allow_null=True,
+        required=False,
+    )
+    unitNumber = serializers.CharField(
+        source='unit_number',
+        allow_blank=True,
+        required=False,
+    )
+    propertyFace = serializers.CharField(
+        source='property_face',
+        allow_null=True,
+        required=False,
+    )
+    serviceCharge = serializers.SerializerMethodField()
+    parkingCount = serializers.IntegerField(
+        source='parking_count',
+        allow_null=True,
+        required=False,
+    )
+    availableFrom = serializers.DateField(
+        source='available_from',
+        allow_null=True,
+        required=False,
+    )
+    rentNegotiable = serializers.BooleanField(
+        source='rent_negotiable',
         required=False,
     )
     tenantType = serializers.CharField(
@@ -89,6 +128,8 @@ class PropertySerializer(serializers.ModelSerializer):
     livingCost = serializers.SerializerMethodField()
     livingConditionScore = serializers.SerializerMethodField()
     safetyScore = serializers.SerializerMethodField()
+    messId = serializers.SerializerMethodField()
+    utilities = serializers.SerializerMethodField()
     tourImages = serializers.JSONField(source='tour_images', required=False)
     cctv = serializers.BooleanField(allow_null=True, required=False)
     streetLighting = serializers.BooleanField(
@@ -127,7 +168,16 @@ class PropertySerializer(serializers.ModelSerializer):
             'floorLevel',
             'bedrooms',
             'bathrooms',
+            'kitchens',
+            'livingRooms',
+            'balconies',
             'sizeSqft',
+            'unitNumber',
+            'propertyFace',
+            'serviceCharge',
+            'parkingCount',
+            'availableFrom',
+            'rentNegotiable',
             'tenantType',
             'furnishing',
             'parking',
@@ -161,6 +211,8 @@ class PropertySerializer(serializers.ModelSerializer):
             'livingCost',
             'livingConditionScore',
             'safetyScore',
+            'messId',
+            'utilities',
             'tourImages',
             'cctv',
             'streetLighting',
@@ -186,6 +238,8 @@ class PropertySerializer(serializers.ModelSerializer):
             'livingCost',
             'livingConditionScore',
             'safetyScore',
+            'messId',
+            'utilities',
         )
 
     def get_ownerName(self, obj):
@@ -196,6 +250,11 @@ class PropertySerializer(serializers.ModelSerializer):
 
     def get_ownerWhatsapp(self, obj) -> str:
         return obj.owner.whatsapp_number or ''
+
+    def get_serviceCharge(self, obj):
+        if obj.service_charge is None:
+            return None
+        return _money(obj.service_charge)
 
     def get_rent(self, obj):
         return _money(obj.rent)
@@ -239,6 +298,24 @@ class PropertySerializer(serializers.ModelSerializer):
         from listings.services.safety_score import safety_score_for_property
 
         return safety_score_for_property(obj)
+
+    def _linked_mess(self, obj):
+        linked = getattr(obj, 'linked_messes', None)
+        if linked is None:
+            return None
+        return linked.filter(is_deleted=False).first()
+
+    def get_messId(self, obj):
+        mess = self._linked_mess(obj)
+        return str(mess.id) if mess is not None else None
+
+    def get_utilities(self, obj):
+        mess = self._linked_mess(obj)
+        if mess is None:
+            return None
+        from mess.services.reliability import reliability_bundle
+
+        return reliability_bundle(mess)
 
 
 class PropertyWriteSerializer(serializers.ModelSerializer):
@@ -294,9 +371,48 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
     )
     bedrooms = serializers.IntegerField(allow_null=True, required=False)
     bathrooms = serializers.IntegerField(allow_null=True, required=False)
+    kitchens = serializers.IntegerField(allow_null=True, required=False)
+    livingRooms = serializers.IntegerField(
+        source='living_rooms',
+        allow_null=True,
+        required=False,
+    )
+    balconies = serializers.IntegerField(allow_null=True, required=False)
     sizeSqft = serializers.IntegerField(
         source='size_sqft',
         allow_null=True,
+        required=False,
+    )
+    unitNumber = serializers.CharField(
+        source='unit_number',
+        required=False,
+        allow_blank=True,
+    )
+    propertyFace = serializers.CharField(
+        source='property_face',
+        allow_null=True,
+        required=False,
+        allow_blank=True,
+    )
+    serviceCharge = serializers.DecimalField(
+        source='service_charge',
+        max_digits=12,
+        decimal_places=2,
+        allow_null=True,
+        required=False,
+    )
+    parkingCount = serializers.IntegerField(
+        source='parking_count',
+        allow_null=True,
+        required=False,
+    )
+    availableFrom = serializers.DateField(
+        source='available_from',
+        allow_null=True,
+        required=False,
+    )
+    rentNegotiable = serializers.BooleanField(
+        source='rent_negotiable',
         required=False,
     )
     tenantType = serializers.CharField(
@@ -362,7 +478,16 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             'floorLevel',
             'bedrooms',
             'bathrooms',
+            'kitchens',
+            'livingRooms',
+            'balconies',
             'sizeSqft',
+            'unitNumber',
+            'propertyFace',
+            'serviceCharge',
+            'parkingCount',
+            'availableFrom',
+            'rentNegotiable',
             'tenantType',
             'furnishing',
             'parking',
@@ -387,11 +512,12 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
         return value
 
     def validate_description(self, value):
-        if not value or len(value.strip()) < 20:
+        plain = _plain_text(value or '')
+        if len(plain) < 20:
             raise serializers.ValidationError(
                 'Description must be at least 20 characters',
             )
-        return value.strip()
+        return (value or '').strip()
 
     def validate(self, attrs):
         images = attrs.get('images', serializers.empty)
@@ -417,9 +543,19 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             attrs.setdefault('listing_status', ListingStatus.DRAFT)
 
         # Normalize empty strings to None for nullable choices
-        for key in ('gender', 'seat_type', 'meal_plan', 'furnishing', 'tenant_type'):
+        for key in (
+            'gender',
+            'seat_type',
+            'meal_plan',
+            'furnishing',
+            'tenant_type',
+            'property_face',
+        ):
             if key in attrs and attrs[key] == '':
                 attrs[key] = None
+
+        if 'parking_count' in attrs and attrs['parking_count'] is not None:
+            attrs['parking'] = attrs['parking_count'] > 0
         return attrs
 
     def create(self, validated_data):

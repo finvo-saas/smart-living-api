@@ -53,6 +53,7 @@ LOCAL_APPS = [
     'payments.apps.PaymentsConfig',
     'mess.apps.MessConfig',
     'hotels.apps.HotelsConfig',
+    'ops.apps.OpsConfig',
     'messaging.apps.MessagingConfig',
     'support.apps.SupportConfig',
     'documents.apps.DocumentsConfig',

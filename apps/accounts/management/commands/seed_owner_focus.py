@@ -1,9 +1,6 @@
-"""Assign each demo owner a clear business focus (mess / apartment / hotel).
+"""Assign each demo owner a single business focus (mess | apartment | hotel).
 
-Rules:
-- Every owner gets at least one vertical.
-- Owners may have one or all verticals.
-- Mess-primary demo owner stays mess-only (no hotels / buildings).
+Product rule: owners pick exactly one vertical.
 """
 
 from __future__ import annotations
@@ -13,14 +10,18 @@ from django.db.models import Q
 
 from accounts.models import Role, User
 from hotels.models import Hotel
+from listings.models import Property
 from mess.models import Mess
 from portfolio.models import Building
+from portfolio.services.seed_buildings import consolidate_buildings_by_name, ensure_building
+from core.seed_catalog import APT_OWNER_PHONES
 
 
 # Canonical demo owner phones (E.164). Also accept remapped product phones.
 MESS_ONLY_PHONES = {
     '+8801712345678',  # catalog Abdul Karim
     '+8801917161352',  # product remapped Abdul Karim (fix_phone_users)
+    '+8801712345679',  # Fatima — mess only (was multi; product is single now)
     '+8801712345681',  # Shahidul — Mohammadpur Campus Mess
     '+8801812345678',  # Nusrat — Uttara Tech Mess
 }
@@ -31,13 +32,9 @@ HOTEL_ONLY_PHONES = {
 }
 
 APARTMENT_ONLY_PHONES = {
-    '+8801712345680',  # Karim Hossain — Green Valley building
+    '+8801712345680',  # Karim Hossain — catalog
+    '+8801917161305',  # Karim Hossain — product remapped login
     '+8801612345678',  # Mahmuda — apartment focus (may get building if empty)
-}
-
-# Fatima keeps mess + apartment (multi)
-MULTI_PHONES = {
-    '+8801712345679': ['mess', 'apartment'],
 }
 
 
@@ -63,7 +60,10 @@ class Command(BaseCommand):
         )
         hotel_primary = by_phone.get('+8801512345678')
         hotel_secondary = by_phone.get('+8801912345678')
-        apartment_owner = by_phone.get('+8801712345680')
+        apartment_owner = (
+            by_phone.get('+8801917161305')
+            or by_phone.get('+8801712345680')
+        )
         mahmuda = by_phone.get('+8801612345678')
 
         # --- Reassign hotels away from mess-only Abdul ---
@@ -105,18 +105,61 @@ class Command(BaseCommand):
                 owner_name=hotel_secondary.name or '',
             )
 
-        # --- Reassign Green Valley building to apartment owner ---
+        # --- Marketplace ads: mess/hostel off apartment Karim; apartments onto him ---
+        if mess_owner and apartment_owner:
+            moved_mess = Property.objects.filter(
+                owner__phone__in=APT_OWNER_PHONES,
+                type__in=('mess', 'hostel'),
+            ).update(owner=mess_owner)
+            if moved_mess:
+                self.stdout.write(
+                    f'  moved {moved_mess} mess/hostel listing(s) -> {mess_owner.phone}',
+                )
+            for listing_name in ('Banani Studio Flat', 'Sunshine Apartment'):
+                n = Property.objects.filter(name=listing_name).update(
+                    owner=apartment_owner,
+                )
+                if n:
+                    self.stdout.write(
+                        f'  {listing_name} -> {apartment_owner.phone}',
+                    )
+            # Drop duplicate Student Hub rows if both Karims had one
+            hubs = list(
+                Property.objects.filter(name='Student Hub Mess').order_by(
+                    'created_at',
+                ),
+            )
+            if hubs:
+                keep = next(
+                    (p for p in hubs if p.owner_id == mess_owner.id),
+                    hubs[0],
+                )
+                if keep.owner_id != mess_owner.id:
+                    keep.owner = mess_owner
+                    keep.save(update_fields=['owner', 'updated_at'])
+                for dup in hubs:
+                    if dup.id != keep.id:
+                        dup.delete()
+                        self.stdout.write(
+                            f'  removed duplicate Student Hub Mess ({dup.id})',
+                        )
+
+        # --- Reassign Green Valley building to apartment owner (merge dupes) ---
         if apartment_owner:
-            moved = Building.objects.filter(name='Green Valley').update(
+            building = consolidate_buildings_by_name(
+                name='Green Valley',
                 owner=apartment_owner,
             )
             if mess_owner:
-                Building.objects.filter(owner=mess_owner).exclude(
+                extras = Building.objects.filter(owner=mess_owner).exclude(
                     name='Green Valley',
-                ).update(owner=apartment_owner)
+                )
+                for b in extras:
+                    b.owner = apartment_owner
+                    b.save(update_fields=['owner', 'updated_at'])
             self.stdout.write(
                 f'  Green Valley building -> {apartment_owner.phone} '
-                f'(rows={moved})',
+                f'(id={building.id if building else None})',
             )
 
         # Mahmuda needs at least one vertical — give a building if she has none
@@ -127,7 +170,7 @@ class Command(BaseCommand):
                 or Building.objects.filter(owner=mahmuda).exists()
             )
             if not has_anything:
-                Building.objects.update_or_create(
+                ensure_building(
                     owner=mahmuda,
                     name='Mahmuda Residence',
                     defaults={
@@ -173,20 +216,20 @@ class Command(BaseCommand):
                 verticals = ['apartment'] if 'apartment' in verticals else (
                     ['apartment'] if Building.objects.filter(owner=user).exists() else ['apartment']
                 )
-            elif user.phone in MULTI_PHONES:
-                verticals = MULTI_PHONES[user.phone]
 
             if not verticals:
                 # Last resort: apartment so owner can still use the app
                 verticals = ['apartment']
 
-            # Deduplicate preserve order
-            seen = set()
-            ordered = []
-            for v in verticals:
-                if v not in seen:
-                    seen.add(v)
-                    ordered.append(v)
+            # Product: exactly one vertical — prefer forced singles, else first owned
+            if user.phone in MESS_ONLY_PHONES:
+                ordered = ['mess']
+            elif user.phone in HOTEL_ONLY_PHONES:
+                ordered = ['hotel']
+            elif user.phone in APARTMENT_ONLY_PHONES:
+                ordered = ['apartment']
+            else:
+                ordered = [verticals[0]]
 
             user.owner_enabled_verticals = ordered
             user.owner_primary_focus = ordered[0]
@@ -208,6 +251,7 @@ class Command(BaseCommand):
         self.stdout.write('Demo logins (OTP from SMS / DEBUG):')
         self.stdout.write('  Mess owner     +8801917161352  Abdul Karim (Green Valley Mess)')
         self.stdout.write('  Mess owner     +8801712345681  Shahidul Islam')
-        self.stdout.write('  Apartment      +8801712345680  Karim Hossain')
+        self.stdout.write('  Apartment      +8801917161305  Karim Hossain (preferred)')
+        self.stdout.write('  Apartment      +8801712345680  Karim Hossain (catalog)')
         self.stdout.write('  Hotel          +8801512345678  Tanvir Hasan')
-        self.stdout.write('  Multi (mess+)  +8801712345679  Fatima Begum')
+        self.stdout.write('  Mess (Fatima)  +8801712345679  Fatima Begum')

@@ -35,6 +35,6 @@ class Command(BaseCommand):
             action = 'Created' if created else 'Updated'
             self.stdout.write(
                 self.style.SUCCESS(
-                    f'{action} admin {phone} → {profile.admin_role}',
+                    f'{action} admin {phone} -> {profile.admin_role}',
                 ),
             )

@@ -55,6 +55,8 @@ class MessSerializer(serializers.ModelSerializer):
     ownerWhatsapp = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     listingId = serializers.UUIDField(source='listing_id', read_only=True, allow_null=True)
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
     featured = serializers.BooleanField(read_only=True)
     lastConfirmedAt = serializers.DateTimeField(
         source='last_confirmed_at',
@@ -87,6 +89,8 @@ class MessSerializer(serializers.ModelSerializer):
             'ownerWhatsapp',
             'createdAt',
             'listingId',
+            'latitude',
+            'longitude',
             'featured',
             'lastConfirmedAt',
             'confirmedHoursAgo',
@@ -100,6 +104,18 @@ class MessSerializer(serializers.ModelSerializer):
     def get_ownerWhatsapp(self, obj) -> str:
         """Live from the account so a later profile edit is picked up."""
         return getattr(obj.owner, 'whatsapp_number', '') or ''
+
+    def get_latitude(self, obj):
+        listing = getattr(obj, 'listing', None)
+        if listing is not None and listing.latitude is not None:
+            return float(listing.latitude)
+        return None
+
+    def get_longitude(self, obj):
+        listing = getattr(obj, 'listing', None)
+        if listing is not None and listing.longitude is not None:
+            return float(listing.longitude)
+        return None
 
     def get_confirmedHoursAgo(self, obj):
         return freshness_dict(obj)['confirmedHoursAgo']
@@ -139,14 +155,89 @@ class MessCreateSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True, default='')
     totalSeats = serializers.IntegerField(source='total_seats', required=False, default=0)
     listingId = serializers.UUIDField(required=False, allow_null=True)
+    publishListing = serializers.BooleanField(required=False, default=True)
 
     def create_mess(self, owner):
         data = dict(self.validated_data)
         listing_id = data.pop('listingId', None)
+        publish_listing = data.pop('publishListing', True)
+        target_seats = int(data.pop('total_seats', 0) or 0)
+        # Counts are derived from Seat rows after capacity sync.
+        data['total_seats'] = 0
+        data['available_seats'] = 0
         mess = Mess.objects.create(owner=owner, **data)
-        from listings.services.inventory import attach_listing_to_mess
+        from mess.services.seats_capacity import ensure_seat_capacity
 
-        attach_listing_to_mess(mess, listing_id)
+        if target_seats > 0:
+            ensure_seat_capacity(mess, target_seats)
+        from listings.services.inventory import (
+            attach_listing_to_mess,
+            ensure_listing_for_mess,
+        )
+
+        if listing_id:
+            attach_listing_to_mess(mess, listing_id)
+        elif publish_listing:
+            listing = ensure_listing_for_mess(mess)
+            try:
+                from discovery.services.geocode import ensure_property_coordinates
+
+                ensure_property_coordinates(listing)
+            except Exception:
+                pass
+        return mess
+
+
+class MessUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255, required=False)
+    address = serializers.CharField(max_length=255, required=False)
+    city = serializers.CharField(max_length=80, required=False)
+    monthlyFee = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        source='monthly_fee',
+        required=False,
+    )
+    gender = serializers.ChoiceField(
+        choices=['male', 'female', 'mixed'],
+        required=False,
+    )
+    facilities = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+    )
+    images = serializers.ListField(child=serializers.CharField(), required=False)
+    description = serializers.CharField(required=False, allow_blank=True)
+    totalSeats = serializers.IntegerField(source='total_seats', required=False, min_value=0)
+    publishListing = serializers.BooleanField(required=False)
+
+    def update_mess(self, mess):
+        data = dict(self.validated_data)
+        publish_listing = data.pop('publishListing', None)
+        target_seats = data.pop('total_seats', None)
+        for field, value in data.items():
+            setattr(mess, field, value)
+        mess.save()
+        if target_seats is not None:
+            from mess.services.seats_capacity import ensure_seat_capacity
+
+            ensure_seat_capacity(mess, target_seats)
+        from listings.services.inventory import (
+            ensure_listing_for_mess,
+            sync_mess_listing,
+        )
+
+        if publish_listing is True:
+            listing = ensure_listing_for_mess(mess)
+            try:
+                from discovery.services.geocode import ensure_property_coordinates
+
+                ensure_property_coordinates(listing)
+            except Exception:
+                pass
+        else:
+            sync_mess_listing(mess)
+        mess.refresh_from_db()
         return mess
 
 

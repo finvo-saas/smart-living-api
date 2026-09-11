@@ -59,6 +59,9 @@ def auth_response(
         pass
     payload = auth_payload(user, request, extra=extra)
     refresh = payload.pop('_refresh')
+    # Also return refresh in JSON so the SPA can refresh when the httpOnly
+    # cookie is missing (Next rewrite / localhost vs 127.0.0.1 mismatches).
+    payload['refresh'] = refresh
     response = Response(api_success(payload), status=status)
     set_refresh_cookie(response, refresh)
     if remember_device:

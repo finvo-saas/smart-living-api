@@ -24,7 +24,7 @@ class Command(BaseCommand):
         tenant = User.objects.filter(role='renter').order_by('created_at').first()
 
         if not owner:
-            self.stdout.write(self.style.WARNING('No owner user found — run seed_portfolio first.'))
+            self.stdout.write(self.style.WARNING('No owner user found - run seed_portfolio first.'))
             return
 
         bill = (
@@ -36,7 +36,7 @@ class Command(BaseCommand):
             bill = Bill.objects.filter(is_deleted=False).order_by('created_at').first()
 
         if bill is None:
-            self.stdout.write(self.style.WARNING('No bills found — run seed_portfolio first.'))
+            self.stdout.write(self.style.WARNING('No bills found - run seed_portfolio first.'))
             return
 
         payer = bill.tenant or tenant or owner

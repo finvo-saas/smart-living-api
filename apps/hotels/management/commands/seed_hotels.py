@@ -170,6 +170,6 @@ class Command(BaseCommand):
                     },
                 )
             hotel.refresh_room_counts()
-            self.stdout.write(f'  {hotel.name} → {hotel.id} ({hotel.total_rooms} rooms)')
+            self.stdout.write(f'  {hotel.name} -> {hotel.id} ({hotel.total_rooms} rooms)')
 
         self.stdout.write(self.style.SUCCESS('Seeded hotels complete.'))

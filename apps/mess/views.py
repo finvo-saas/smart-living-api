@@ -8,7 +8,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.envelope import api_success
-from core.exceptions import ForbiddenError, InvalidError, NotFoundError
+from core.exceptions import (
+    ForbiddenError,
+    InvalidError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from mess.models import (
     AttendanceRecord,
     DailyMenu,
@@ -47,6 +52,7 @@ from mess.serializers import (
     MessRuleSerializer,
     MessRuleWriteSerializer,
     MessSerializer,
+    MessUpdateSerializer,
     NoticeSerializer,
     NoticeWriteSerializer,
     RuleAcceptanceSerializer,
@@ -94,7 +100,7 @@ from mess.services.sms_credits import (
 
 
 def _mess_qs():
-    return Mess.objects.filter(is_deleted=False).select_related('owner')
+    return Mess.objects.filter(is_deleted=False).select_related('owner', 'listing')
 
 
 def _get_mess(pk):
@@ -213,15 +219,16 @@ class MessListCreateView(APIView):
             qs = qs.filter(city__iexact=city.strip())
         if gender and gender != 'all':
             qs = qs.filter(gender=gender)
-        if request.user.is_authenticated and request.user.role == 'owner':
-            owner_only = request.query_params.get('mine')
-            if owner_only in ('1', 'true', 'yes'):
-                qs = qs.filter(
-                    Q(owner=request.user)
-                    | Q(owner_phone=request.user.phone),
-                )
-            else:
-                qs = qs.filter(flagged_unavailable_at__isnull=True)
+        owner_only = request.query_params.get('mine')
+        if owner_only in ('1', 'true', 'yes'):
+            if not request.user.is_authenticated:
+                raise UnauthorizedError('Sign in to view your messes.')
+            if request.user.role not in ('owner', 'admin'):
+                raise ForbiddenError('Only owners can list their messes.')
+            qs = qs.filter(
+                Q(owner=request.user)
+                | Q(owner_phone=request.user.phone),
+            )
         else:
             qs = qs.filter(flagged_unavailable_at__isnull=True)
         return Response(api_success(_serialize_messes(qs)))
@@ -239,10 +246,21 @@ class MessListCreateView(APIView):
 
 
 class MessDetailView(APIView):
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get(self, request, pk):
         mess = _get_mess(pk)
+        return Response(api_success(_serialize_mess(mess)))
+
+    def patch(self, request, pk):
+        mess = _get_mess(pk)
+        _assert_mess_owner(mess, request.user)
+        serializer = MessUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        mess = serializer.update_mess(mess)
         return Response(api_success(_serialize_mess(mess)))
 
 

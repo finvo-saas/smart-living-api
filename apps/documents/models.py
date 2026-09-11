@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import models
 
 from core.models import TimestampedModel, UUIDModel
+from core.scope import ScopeType
 
 
 class AgreementType(models.TextChoices):
@@ -23,6 +24,16 @@ class RentalAgreement(UUIDModel, TimestampedModel):
         on_delete=models.CASCADE,
         related_name='rental_agreements',
     )
+    # Shared polymorphic scope (prefer over bare property_id)
+    scope_type = models.CharField(
+        max_length=20,
+        choices=ScopeType.choices,
+        blank=True,
+        default=ScopeType.BUILDING,
+        db_index=True,
+    )
+    scope_id = models.UUIDField(null=True, blank=True, db_index=True)
+    # Legacy: historically stored Building.id (not listings.Property)
     property_id = models.UUIDField(db_index=True)
     property_name = models.CharField(max_length=255)
     flat_id = models.UUIDField(null=True, blank=True)
@@ -62,6 +73,15 @@ class RentalAgreement(UUIDModel, TimestampedModel):
     class Meta:
         db_table = 'documents_rental_agreement'
         ordering = ('-created_at',)
+
+    def save(self, *args, **kwargs):
+        if not self.scope_id and self.property_id:
+            self.scope_id = self.property_id
+        if not self.scope_type:
+            self.scope_type = ScopeType.BUILDING
+        if self.scope_id and not self.property_id:
+            self.property_id = self.scope_id
+        super().save(*args, **kwargs)
 
 
 class AgreementRenewal(UUIDModel, TimestampedModel):
@@ -105,6 +125,14 @@ class Checklist(UUIDModel, TimestampedModel):
         on_delete=models.CASCADE,
         related_name='checklists',
     )
+    scope_type = models.CharField(
+        max_length=20,
+        choices=ScopeType.choices,
+        blank=True,
+        default=ScopeType.BUILDING,
+        db_index=True,
+    )
+    scope_id = models.UUIDField(null=True, blank=True, db_index=True)
     property_id = models.UUIDField(db_index=True)
     property_name = models.CharField(max_length=255)
     flat_id = models.UUIDField(null=True, blank=True)
@@ -148,3 +176,12 @@ class Checklist(UUIDModel, TimestampedModel):
     class Meta:
         db_table = 'documents_checklist'
         ordering = ('-created_at',)
+
+    def save(self, *args, **kwargs):
+        if not self.scope_id and self.property_id:
+            self.scope_id = self.property_id
+        if not self.scope_type:
+            self.scope_type = ScopeType.BUILDING
+        if self.scope_id and not self.property_id:
+            self.property_id = self.scope_id
+        super().save(*args, **kwargs)

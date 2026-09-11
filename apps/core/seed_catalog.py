@@ -3,8 +3,9 @@
 Keep demo phones stable so existing docs and OTP logins still work:
   Admins   +8801711111111 / 1722222222 / 1733333333
   Mess owner (catalog)     +8801712345678  Abdul Karim
-  Mess owner (product map) +8801917161352  Abdul Karim  ← fix_phone_users
-  Apartment owner          +8801712345680  Karim Hossain
+  Mess owner (product map) +8801917161352  Abdul Karim  ← fix_phone_users / product
+  Apartment owner (catalog) +8801712345680  Karim Hossain
+  Apartment owner (product) +8801917161305  Karim Hossain  ← remapped login
   Hotel owner              +8801512345678  Tanvir Hasan
   Renter                   +8801710000001  Rahim Uddin
 """
@@ -25,6 +26,20 @@ IMG = {
     'beach': 'https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?w=800',
     'resort': 'https://images.unsplash.com/photo-1571896349842-33c89424de2d?w=800',
 }
+
+# Product remapped phones (prefer these when present).
+MESS_OWNER_PHONES = ('+8801917161352', '+8801712345678')
+APT_OWNER_PHONES = ('+8801917161305', '+8801712345680')
+HOTEL_OWNER_PHONES = ('+8801512345678',)
+
+
+def resolve_owner(*phones: str) -> User | None:
+    """Return the first existing user among preferred phones (product map first)."""
+    for phone in phones:
+        user = User.objects.filter(phone=phone).first()
+        if user:
+            return user
+    return None
 
 
 OWNERS = [
@@ -236,6 +251,19 @@ EXTRA_LISTINGS = [
         'nearby_facilities': ['Banani Lake', 'Kemal Ataturk Avenue', 'Grocery'],
         'building_age': 4,
         'floor_level': 6,
+        'bedrooms': 1,
+        'bathrooms': 1,
+        'kitchens': 1,
+        'living_rooms': 1,
+        'balconies': 1,
+        'size_sqft': 650,
+        'unit_number': 'F-6',
+        'property_face': 'south',
+        'service_charge': 3000,
+        'parking_count': 1,
+        'available_from': '2026-04-01',
+        'rent_negotiable': True,
+        'tenant_type': 'bachelor',
         'furnishing': 'furnished',
         'parking': True,
         'security': True,
@@ -244,11 +272,15 @@ EXTRA_LISTINGS = [
         'deposit_months': 2,
         'instant_book': True,
         'description': (
-            'Furnished studio near Kemal Ataturk Avenue. Ideal for young professionals '
-            'working in Gulshan–Banani.'
+            '<h2>About this studio</h2>'
+            '<p>Fully furnished studio near Kemal Ataturk Avenue. Ideal for young '
+            'professionals working in Gulshan–Banani.</p>'
+            '<ul><li>AC bedroom + attached bath</li>'
+            '<li>Dedicated parking</li>'
+            '<li>24/7 security &amp; generator</li></ul>'
         ),
-        'owner_phone': '+8801712345679',
-        'owner_name': 'Fatima Begum',
+        'owner_phone': '+8801712345680',
+        'owner_name': 'Karim Hossain',
     },
     {
         'name': 'Mohammadpur Family Mess',
@@ -294,14 +326,31 @@ EXTRA_LISTINGS = [
         'nearby_facilities': ['Jamuna Future Park', 'NSU', 'IUB'],
         'building_age': 3,
         'floor_level': 8,
+        'bedrooms': 3,
+        'bathrooms': 3,
+        'kitchens': 1,
+        'living_rooms': 1,
+        'balconies': 2,
+        'size_sqft': 1650,
+        'unit_number': 'C-8B',
+        'property_face': 'south',
+        'service_charge': 8000,
+        'parking_count': 2,
+        'available_from': '2026-05-15',
+        'rent_negotiable': True,
+        'tenant_type': 'family',
         'furnishing': 'semi-furnished',
         'parking': True,
         'security': True,
         'verified': True,
         'deposit_months': 2,
         'description': (
-            'South-facing 3 bedroom flat in Bashundhara. Close to universities and '
-            'Jamuna Future Park.'
+            '<h2>South-facing 3BHK</h2>'
+            '<p>Bright family flat in Bashundhara R/A. Close to universities and '
+            'Jamuna Future Park.</p>'
+            '<ul><li>3 beds · 3 baths · 2 balconies</li>'
+            '<li>Semi-furnished with fitted kitchen</li>'
+            '<li>Two parking spaces</li></ul>'
         ),
         'owner_phone': '+8801712345681',
         'owner_name': 'Shahidul Islam',

@@ -26,7 +26,7 @@ class Command(BaseCommand):
         owner = User.objects.filter(phone=owner_phone).first()
         if not owner:
             self.stdout.write(self.style.WARNING(
-                f'Owner {owner_phone} not found — run seed_portfolio or seed_mess first.',
+                f'Owner {owner_phone} not found - run seed_portfolio or seed_mess first.',
             ))
             return
 
@@ -257,7 +257,7 @@ class Command(BaseCommand):
                 },
             )
 
-        self.stdout.write(self.style.SUCCESS('Phase 7 seed complete — IDs:'))
+        self.stdout.write(self.style.SUCCESS('Phase 7 seed complete - IDs:'))
         self.stdout.write(f'  owner_phone={owner.phone} owner_id={owner.id}')
         self.stdout.write(f'  renter_phone={renter.phone} renter_id={renter.id}')
         self.stdout.write(f'  complaint_ids={[str(c1.id), str(c2.id)]}')

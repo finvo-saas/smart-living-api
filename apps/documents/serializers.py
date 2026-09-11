@@ -43,6 +43,8 @@ def _date_str(dt) -> str:
 
 class RentalAgreementSerializer(serializers.ModelSerializer):
     userId = serializers.UUIDField(source='user_id', read_only=True)
+    scopeType = serializers.CharField(source='scope_type', read_only=True)
+    scopeId = serializers.UUIDField(source='scope_id', read_only=True, allow_null=True)
     propertyId = serializers.UUIDField(source='property_id')
     propertyName = serializers.CharField(source='property_name')
     flatId = serializers.SerializerMethodField()
@@ -82,6 +84,8 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'userId',
+            'scopeType',
+            'scopeId',
             'propertyId',
             'propertyName',
             'flatId',
@@ -142,6 +146,13 @@ class RentalAgreementSerializer(serializers.ModelSerializer):
 
 
 class RentalAgreementWriteSerializer(serializers.Serializer):
+    scopeType = serializers.ChoiceField(
+        choices=['mess', 'building', 'hotel'],
+        required=False,
+        default='building',
+        source='scope_type',
+    )
+    scopeId = serializers.UUIDField(required=False, allow_null=True, source='scope_id')
     propertyId = serializers.UUIDField(source='property_id')
     propertyName = serializers.CharField(source='property_name')
     flatId = serializers.UUIDField(required=False, allow_null=True, source='flat_id')
@@ -184,6 +195,10 @@ class RentalAgreementWriteSerializer(serializers.Serializer):
     def create_agreement(self, user):
         data = self.validated_data.copy()
         data['uploaded_by'] = data.get('uploaded_by') or str(user.id)
+        if not data.get('scope_id'):
+            data['scope_id'] = data['property_id']
+        if not data.get('scope_type'):
+            data['scope_type'] = 'building'
         return RentalAgreement.objects.create(user=user, **data)
 
 

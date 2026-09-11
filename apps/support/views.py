@@ -71,25 +71,28 @@ def _owner_complaints_qs(owner):
     )
 
 
+def _is_managing_owner(user, complaint: Complaint) -> bool:
+    if user.role != Role.OWNER:
+        return False
+    if complaint.user_id in _tenant_user_ids_for_owner(user):
+        return True
+    if complaint.building_id and complaint.building.owner_id == user.id:
+        return True
+    if complaint.scope_type and complaint.scope_id:
+        from ops.services import can_manage_scope
+
+        return can_manage_scope(user, complaint.scope_type, complaint.scope_id)
+    return False
+
+
 def _can_access_complaint(user, complaint: Complaint) -> bool:
     if user.role == Role.ADMIN:
         return True
     if complaint.user_id == user.id:
         return True
-    if user.role == Role.OWNER and (
-        complaint.user_id in _tenant_user_ids_for_owner(user)
-        or (complaint.building_id and complaint.building.owner_id == user.id)
-    ):
+    if user.role == Role.OWNER and _is_managing_owner(user, complaint):
         return True
     return False
-
-
-def _is_managing_owner(user, complaint: Complaint) -> bool:
-    if user.role != Role.OWNER:
-        return False
-    return complaint.user_id in _tenant_user_ids_for_owner(user) or (
-        complaint.building_id and complaint.building.owner_id == user.id
-    )
 
 
 class ComplaintListCreateView(APIView):
@@ -133,28 +136,44 @@ class ComplaintStatusUpdateView(APIView):
         if not is_staff and not is_creator:
             raise ForbiddenError('You cannot update this complaint.')
 
-        ser = ComplaintStatusUpdateSerializer(data=request.data)
+        ser = ComplaintStatusUpdateSerializer(data=request.data, partial=True)
         ser.is_valid(raise_exception=True)
-        new_status = ser.validated_data['status']
+        data = ser.validated_data
 
-        if not is_staff and new_status != ComplaintStatus.OPEN:
-            raise ForbiddenError('Only owners or admins can change complaint status.')
+        # Creator (or staff) may edit original ticket content.
+        content_keys = {'title', 'description', 'category'}
+        if content_keys & set(data.keys()):
+            if not is_creator and not is_staff:
+                raise ForbiddenError('Only the author or owner can edit complaint content.')
+            if 'title' in data and data['title']:
+                complaint.title = data['title'].strip()
+            if 'description' in data and data['description']:
+                complaint.description = data['description'].strip()
+            if 'category' in data and data['category']:
+                complaint.category = data['category']
 
-        complaint.status = new_status
-        if 'response' in ser.validated_data and ser.validated_data.get('response'):
-            reply = ser.validated_data['response'].strip()
+        if 'status' in data:
+            new_status = data['status']
+            if not is_staff and new_status != ComplaintStatus.OPEN:
+                raise ForbiddenError('Only owners or admins can change complaint status.')
+            complaint.status = new_status
+            if new_status == ComplaintStatus.RESOLVED:
+                complaint.resolved_at = timezone.now()
+            elif new_status != ComplaintStatus.RESOLVED:
+                complaint.resolved_at = None
+
+        if data.get('response'):
+            if not is_staff and not is_creator:
+                raise ForbiddenError('You cannot reply on this complaint.')
+            reply = data['response'].strip()
             complaint.response = reply
-            # Also append to thread
             ComplaintMessage.objects.create(
                 complaint=complaint,
                 author=user,
                 body=reply,
                 is_staff_reply=is_staff,
             )
-        if new_status == ComplaintStatus.RESOLVED:
-            complaint.resolved_at = timezone.now()
-        elif new_status != ComplaintStatus.RESOLVED:
-            complaint.resolved_at = None
+
         complaint.save()
 
         complaint = _get_complaint(complaint.id)
