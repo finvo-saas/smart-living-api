@@ -1,10 +1,11 @@
 from django.contrib import admin
 
+from core.admin import TimestampedModelAdmin
 from discovery.models import HeartbeatPing
 
 
 @admin.register(HeartbeatPing)
-class HeartbeatPingAdmin(admin.ModelAdmin):
+class HeartbeatPingAdmin(TimestampedModelAdmin):
     list_display = (
         'target_name',
         'target_type',

@@ -138,6 +138,11 @@ class Tenancy(UUIDModel, TimestampedModel):
         blank=True,
     )
     agreement_ref = models.CharField(max_length=120, blank=True, default='')
+    notes = models.TextField(
+        blank=True,
+        default='',
+        help_text='Assign/vacate notes including advance settlement remarks.',
+    )
     status = models.CharField(
         max_length=20,
         choices=TenancyStatus.choices,
@@ -165,3 +170,87 @@ class Tenancy(UUIDModel, TimestampedModel):
 
     def __str__(self):
         return f'{self.flat_id}:{self.tenant_id}:{self.status}'
+
+
+class NoticePriority(models.TextChoices):
+    HIGH = 'high', 'High'
+    MEDIUM = 'medium', 'Medium'
+    LOW = 'low', 'Low'
+
+
+class NoticeCategory(models.TextChoices):
+    GENERAL = 'general', 'General'
+    PAYMENT = 'payment', 'Payment'
+    MAINTENANCE = 'maintenance', 'Maintenance'
+    EVENT = 'event', 'Event'
+    ANNOUNCEMENT = 'announcement', 'Announcement'
+    RULE = 'rule', 'Rule'
+    OTHER = 'other', 'Other'
+
+
+class BuildingNotice(UUIDModel, TimestampedModel):
+    """Owner announcements for apartment tenants in a building."""
+
+    building = models.ForeignKey(
+        Building,
+        on_delete=models.CASCADE,
+        related_name='notices',
+    )
+    title = models.CharField(max_length=255)
+    content = models.TextField()
+    date = models.DateField()
+    priority = models.CharField(max_length=10, choices=NoticePriority.choices)
+    category = models.CharField(
+        max_length=20,
+        choices=NoticeCategory.choices,
+        default=NoticeCategory.GENERAL,
+    )
+    expiry_date = models.DateField(null=True, blank=True)
+    pdf_url = models.URLField(blank=True, default='')
+    image_urls = models.JSONField(default=list, blank=True)
+    # Empty list = all flats / all active tenants in the building
+    flat_ids = models.JSONField(default=list, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='building_notices_created',
+    )
+    is_deleted = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        db_table = 'portfolio_building_notice'
+        ordering = ('-date', '-created_at')
+
+    def __str__(self):
+        return f'{self.building.name}: {self.title}'
+
+
+class BuildingNoticeAck(UUIDModel, TimestampedModel):
+    notice = models.ForeignKey(
+        BuildingNotice,
+        on_delete=models.CASCADE,
+        related_name='acknowledgments',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='building_notice_acks',
+    )
+    user_name = models.CharField(max_length=255, blank=True, default='')
+    acknowledged_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'portfolio_building_notice_ack'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['notice', 'user'],
+                name='unique_building_notice_ack_per_user',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.user_id and not self.user_name:
+            user = self.user
+            self.user_name = user.name or f'User {user.phone[-4:]}'
+        super().save(*args, **kwargs)

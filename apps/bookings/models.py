@@ -69,6 +69,15 @@ class PropertyBooking(UUIDModel, TimestampedModel):
     message = models.TextField(blank=True, default='')
     special_requests = models.TextField(blank=True, default='')
 
+    flat = models.ForeignKey(
+        'portfolio.Flat',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='bookings',
+        help_text='Assigned unit when an apartment booking is approved.',
+    )
+
     approved_at = models.DateTimeField(null=True, blank=True)
     rejected_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)

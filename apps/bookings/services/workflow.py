@@ -1,18 +1,20 @@
 from decimal import Decimal
 
+from django.db import transaction
 from django.utils import timezone
 
 from bookings.models import BookingMode, BookingStatus, PropertyBooking
 from core.exceptions import (
     ConflictError,
     ForbiddenError,
+    InvalidError,
     InvalidStateError,
     NotFoundError,
     ReasonRequiredError,
     UnavailableError,
     UnpublishedError,
 )
-from listings.models import ListingStatus, Property
+from listings.models import ListingStatus, Property, PropertyType
 
 
 ACTIVE_STATUSES = (BookingStatus.PENDING, BookingStatus.APPROVED)
@@ -83,7 +85,7 @@ def create_booking(user, data: dict) -> PropertyBooking:
         approved_at = None
 
     owner = prop.owner
-    return PropertyBooking.objects.create(
+    booking = PropertyBooking.objects.create(
         property=prop,
         renter=user,
         owner=owner,
@@ -109,10 +111,93 @@ def create_booking(user, data: dict) -> PropertyBooking:
         approved_at=approved_at,
     )
 
+    # Instant apartment book: auto-assign when exactly one vacant linked flat exists.
+    if (
+        status == BookingStatus.APPROVED
+        and prop.type == PropertyType.APARTMENT
+    ):
+        from portfolio.models import Flat, FlatStatus
 
-def patch_status(actor, booking_id, status: str, reason: str | None = None) -> PropertyBooking:
+        linked = list(
+            Flat.objects.filter(
+                listing=prop,
+                status=FlatStatus.AVAILABLE,
+            ).order_by('floor_number', 'flat_number')[:2]
+        )
+        if len(linked) == 1:
+            try:
+                _assign_flat_to_booking(booking, linked[0].id, actor=owner)
+            except Exception:  # noqa: BLE001
+                pass
+
+    return booking
+
+
+def _assign_flat_to_booking(booking: PropertyBooking, flat_id, *, actor) -> None:
+    """Occupy a flat and create tenancy from an approved/approving booking."""
+    from portfolio.models import Flat, FlatStatus, Tenancy, TenancyStatus
+    from listings.services.inventory import sync_flat_listing
+
     try:
-        booking = PropertyBooking.objects.select_related('renter', 'owner').get(
+        flat = Flat.objects.select_related('building').get(pk=flat_id)
+    except Flat.DoesNotExist as exc:
+        raise NotFoundError('Flat not found.') from exc
+
+    if flat.building.owner_id != booking.owner_id and getattr(actor, 'role', None) != 'admin':
+        raise ForbiddenError('You can only assign flats from your buildings.')
+
+    if flat.status == FlatStatus.OCCUPIED:
+        raise InvalidError('Flat is already occupied. Vacate first.')
+
+    if flat.listing_id and str(flat.listing_id) != str(booking.property_id):
+        raise InvalidError('This flat is linked to a different listing.')
+
+    if flat.listing_id is None:
+        flat.listing_id = booking.property_id
+
+    Tenancy.objects.filter(flat=flat, status=TenancyStatus.ACTIVE).update(
+        status=TenancyStatus.ENDED,
+        end_date=timezone.localdate(),
+    )
+
+    start = booking.move_in_date or timezone.localdate()
+    renter = booking.renter
+    Tenancy.objects.create(
+        flat=flat,
+        tenant=renter,
+        start_date=start,
+        end_date=booking.move_out_date,
+        deposit=booking.deposit,
+        status=TenancyStatus.ACTIVE,
+        notes=f'Created from booking {booking.id}',
+        tenant_name=booking.renter_name or _display_name(renter),
+        tenant_phone=booking.renter_phone or renter.phone,
+        tenant_whatsapp=getattr(renter, 'whatsapp_number', '') or '',
+        tenant_email=booking.renter_email or renter.email or '',
+        tenant_nid='',
+        tenant_address='',
+    )
+    flat.status = FlatStatus.OCCUPIED
+    flat.save(update_fields=['status', 'listing_id', 'updated_at'])
+    flat.building.refresh_counts()
+    booking.flat = flat
+    sync_flat_listing(flat)
+
+
+@transaction.atomic
+def patch_status(
+    actor,
+    booking_id,
+    status: str,
+    reason: str | None = None,
+    flat_id=None,
+) -> PropertyBooking:
+    try:
+        booking = PropertyBooking.objects.select_related(
+            'renter',
+            'owner',
+            'property',
+        ).get(
             pk=booking_id,
             is_deleted=False,
         )
@@ -130,9 +215,22 @@ def patch_status(actor, booking_id, status: str, reason: str | None = None) -> P
             raise InvalidStateError('Only pending bookings can be approved.')
         if not (is_owner or is_admin):
             raise ForbiddenError('Only the owner can approve bookings.')
+
+        # Apartment bookings require a vacant flat → tenancy.
+        if booking.property_type == PropertyType.APARTMENT:
+            if not flat_id:
+                raise InvalidError(
+                    'Select a vacant flat to approve this apartment booking.',
+                    code='FLAT_REQUIRED',
+                )
+            _assign_flat_to_booking(booking, flat_id, actor=actor)
+
         booking.status = BookingStatus.APPROVED
         booking.approved_at = now
-        booking.save(update_fields=['status', 'approved_at', 'updated_at'])
+        update_fields = ['status', 'approved_at', 'updated_at']
+        if booking.flat_id:
+            update_fields.append('flat')
+        booking.save(update_fields=update_fields)
         return booking
 
     if status == BookingStatus.REJECTED:

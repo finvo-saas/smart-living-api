@@ -51,6 +51,18 @@ class PropertySerializer(serializers.ModelSerializer):
         allow_null=True,
         required=False,
     )
+    bedrooms = serializers.IntegerField(allow_null=True, required=False)
+    bathrooms = serializers.IntegerField(allow_null=True, required=False)
+    sizeSqft = serializers.IntegerField(
+        source='size_sqft',
+        allow_null=True,
+        required=False,
+    )
+    tenantType = serializers.CharField(
+        source='tenant_type',
+        allow_null=True,
+        required=False,
+    )
     verificationStatus = serializers.CharField(source='verification_status')
     verifiedAt = serializers.DateTimeField(source='verified_at', allow_null=True)
     instantBook = serializers.BooleanField(source='instant_book', required=False)
@@ -113,6 +125,10 @@ class PropertySerializer(serializers.ModelSerializer):
             'nearbyFacilities',
             'buildingAge',
             'floorLevel',
+            'bedrooms',
+            'bathrooms',
+            'sizeSqft',
+            'tenantType',
             'furnishing',
             'parking',
             'security',
@@ -276,6 +292,19 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
         allow_null=True,
         required=False,
     )
+    bedrooms = serializers.IntegerField(allow_null=True, required=False)
+    bathrooms = serializers.IntegerField(allow_null=True, required=False)
+    sizeSqft = serializers.IntegerField(
+        source='size_sqft',
+        allow_null=True,
+        required=False,
+    )
+    tenantType = serializers.CharField(
+        source='tenant_type',
+        allow_null=True,
+        required=False,
+        allow_blank=True,
+    )
     instantBook = serializers.BooleanField(source='instant_book', required=False)
     depositMonths = serializers.IntegerField(source='deposit_months', required=False)
     listingStatus = serializers.ChoiceField(
@@ -331,6 +360,10 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             'nearbyFacilities',
             'buildingAge',
             'floorLevel',
+            'bedrooms',
+            'bathrooms',
+            'sizeSqft',
+            'tenantType',
             'furnishing',
             'parking',
             'security',
@@ -384,7 +417,7 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             attrs.setdefault('listing_status', ListingStatus.DRAFT)
 
         # Normalize empty strings to None for nullable choices
-        for key in ('gender', 'seat_type', 'meal_plan', 'furnishing'):
+        for key in ('gender', 'seat_type', 'meal_plan', 'furnishing', 'tenant_type'):
             if key in attrs and attrs[key] == '':
                 attrs[key] = None
         return attrs

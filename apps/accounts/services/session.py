@@ -50,6 +50,13 @@ def auth_response(
 ):
     user.last_login = timezone.now()
     user.save(update_fields=['last_login'])
+    # Owner-added mess members use the same phone; attach after login/signup.
+    try:
+        from mess.services.membership import link_user_to_mess_memberships
+
+        link_user_to_mess_memberships(user)
+    except Exception:  # noqa: BLE001 — never block auth on membership linking
+        pass
     payload = auth_payload(user, request, extra=extra)
     refresh = payload.pop('_refresh')
     response = Response(api_success(payload), status=status)

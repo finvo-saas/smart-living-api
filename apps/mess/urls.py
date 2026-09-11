@@ -20,6 +20,7 @@ from mess.views import (
     MessExpenseSplitView,
     MessLiveStatusView,
     MessListCreateView,
+    MessMyMembershipsView,
     MessNoticesView,
     MessRuleDetailView,
     MessRuleListCreateView,
@@ -125,6 +126,7 @@ urlpatterns = [
         HisabReopenMonthView.as_view(),
         name='mess-hisab-month-reopen',
     ),
+    path('mess/me/memberships/', MessMyMembershipsView.as_view(), name='mess-my-memberships'),
     path('mess/<uuid:pk>/students/', MessStudentsView.as_view(), name='mess-students'),
     path(
         'mess/<uuid:pk>/students/<uuid:student_id>/',

@@ -147,14 +147,19 @@ def complete_transaction(
     payout_status: str | None = None,
     force_mark_bill_paid: bool = False,
 ) -> OwnerPayout | None:
+    bill = txn.bill
     if txn.status == PaymentTransactionStatus.COMPLETED:
+        # Still sync ledger in case caller marked completed without bill update.
+        if force_mark_bill_paid:
+            mark_bill_paid(bill)
+        else:
+            sync_bill_payment_state(bill)
         return OwnerPayout.objects.filter(payment_transaction=txn).first()
 
     txn.status = PaymentTransactionStatus.COMPLETED
     txn.completed_at = timezone.now()
     txn.save(update_fields=['status', 'completed_at', 'updated_at'])
 
-    bill = txn.bill
     if force_mark_bill_paid:
         mark_bill_paid(bill)
     else:

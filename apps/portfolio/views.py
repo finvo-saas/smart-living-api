@@ -22,10 +22,14 @@ from portfolio.serializers import (
     FloorSerializer,
     FloorStatsSerializer,
     FloorWriteSerializer,
+    MyTenancySerializer,
     RenterSerializer,
+    VacateFlatSerializer,
 )
 from portfolio.services.renter_history import get_renter_history
 from subscriptions.services import assert_can_add_flat, get_flat_limit_status
+from mess.models import Mess
+from mess.serializers import MessSerializer
 
 
 def _require_owner(user):
@@ -280,6 +284,17 @@ class FlatListCreateView(APIView):
             building=building,
             floor_number=floor_number,
         ).first()
+        if floor is None:
+            floor = Floor.objects.create(
+                building=building,
+                floor_number=floor_number,
+                name=f'Floor {floor_number}',
+            )
+        if Flat.objects.filter(
+            building=building,
+            flat_number=serializer.validated_data['flat_number'],
+        ).exists():
+            raise InvalidError('A flat with this number already exists in the building.')
         flat = serializer.save(building=building, floor=floor)
         building.refresh_counts()
         return Response(
@@ -290,6 +305,10 @@ class FlatListCreateView(APIView):
 
 class FlatDetailView(APIView):
     permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        flat = _owner_flat(request.user, pk)
+        return Response(api_success(_serialize_flat(flat)))
 
     def patch(self, request, pk):
         flat = _owner_flat(request.user, pk)
@@ -305,6 +324,48 @@ class FlatDetailView(APIView):
         flat = serializer.save()
         flat.building.refresh_counts()
         return Response(api_success(_serialize_flat(flat)))
+
+    def delete(self, request, pk):
+        flat = _owner_flat(request.user, pk)
+        if flat.status == FlatStatus.OCCUPIED:
+            raise InvalidError('Vacate the flat before deleting it.')
+        if Tenancy.objects.filter(flat=flat, status=TenancyStatus.ACTIVE).exists():
+            raise InvalidError('Vacate the flat before deleting it.')
+        building = flat.building
+        flat.delete()
+        building.refresh_counts()
+        return Response(api_success(None))
+
+
+class FlatEnsureListingView(APIView):
+    """Create/link a public apartment listing for a vacant (or any) flat."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        _require_owner(request.user)
+        flat = _owner_flat(request.user, pk)
+        publish = request.data.get('publish', True)
+        if isinstance(publish, str):
+            publish = publish.lower() not in ('0', 'false', 'no')
+        from listings.services.inventory import ensure_listing_for_flat
+        from listings.serializers import PropertySerializer
+
+        listing = ensure_listing_for_flat(flat, publish=bool(publish))
+        flat.refresh_from_db()
+        return Response(
+            api_success(
+                {
+                    'listingId': str(listing.id),
+                    'bookUrl': f'/listings/{listing.id}',
+                    'flat': _serialize_flat(flat),
+                    'listing': PropertySerializer(
+                        listing,
+                        context={'request': request},
+                    ).data,
+                },
+            ),
+        )
 
 
 class FlatAssignRenterView(APIView):
@@ -327,6 +388,8 @@ class FlatAssignRenterView(APIView):
             data.get('email', ''),
         )
         start = data.get('joinedDate') or timezone.localdate()
+        deposit = data.get('deposit')
+        notes = (data.get('notes') or '').strip()
 
         Tenancy.objects.filter(flat=flat, status=TenancyStatus.ACTIVE).update(
             status=TenancyStatus.ENDED,
@@ -337,6 +400,8 @@ class FlatAssignRenterView(APIView):
             tenant=tenant,
             start_date=start,
             status=TenancyStatus.ACTIVE,
+            deposit=deposit,
+            notes=notes,
             tenant_name=data['name'].strip(),
             tenant_phone=normalize_bd_phone(data['phone']),
             tenant_whatsapp=data.get('whatsapp') or tenant.whatsapp_number,
@@ -374,13 +439,36 @@ class FlatVacateView(APIView):
     def post(self, request, pk):
         _require_owner(request.user)
         flat = _owner_flat(request.user, pk)
+        serializer = VacateFlatSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
         today = timezone.localdate()
-        updated = Tenancy.objects.filter(
-            flat=flat,
-            status=TenancyStatus.ACTIVE,
-        ).update(status=TenancyStatus.ENDED, end_date=today)
-        if not updated:
+        tenancy = (
+            Tenancy.objects.filter(flat=flat, status=TenancyStatus.ACTIVE)
+            .order_by('-start_date')
+            .first()
+        )
+        if not tenancy:
             raise InvalidError('No active tenancy for this flat.')
+
+        note_parts = []
+        if tenancy.notes:
+            note_parts.append(tenancy.notes.strip())
+        advance_note = (data.get('advanceNote') or '').strip()
+        if advance_note:
+            note_parts.append(f'Vacate ({today.isoformat()}): {advance_note}')
+        deposit_returned = data.get('depositReturned')
+        if deposit_returned is not None:
+            note_parts.append(
+                f'Deposit returned: {deposit_returned} on {today.isoformat()}',
+            )
+
+        tenancy.status = TenancyStatus.ENDED
+        tenancy.end_date = today
+        tenancy.notes = '\n'.join(part for part in note_parts if part)
+        tenancy.save(update_fields=['status', 'end_date', 'notes', 'updated_at'])
+
         flat.status = FlatStatus.AVAILABLE
         flat.save(update_fields=['status', 'updated_at'])
         flat.building.refresh_counts()
@@ -388,6 +476,73 @@ class FlatVacateView(APIView):
 
         sync_flat_listing(flat)
         return Response(api_success(_serialize_flat(flat)))
+
+
+def _serialize_my_tenancy(tenancy: Tenancy) -> dict:
+    flat = tenancy.flat
+    building = flat.building
+    owner = building.owner
+    owner_whatsapp = getattr(owner, 'whatsapp_number', '') or ''
+    return MyTenancySerializer(
+        {
+            'id': tenancy.id,
+            'status': tenancy.status,
+            'startDate': tenancy.start_date.isoformat(),
+            'endDate': tenancy.end_date.isoformat() if tenancy.end_date else None,
+            'deposit': float(tenancy.deposit) if tenancy.deposit is not None else None,
+            'notes': tenancy.notes or '',
+            'flat': {
+                'id': str(flat.id),
+                'flatNumber': flat.flat_number,
+                'floor': flat.floor_number,
+                'rent': float(flat.rent),
+                'status': flat.status,
+                'area': flat.area,
+                'bedrooms': flat.bedrooms,
+                'bathrooms': flat.bathrooms,
+                'buildingId': str(building.id),
+            },
+            'building': {
+                'id': str(building.id),
+                'name': building.name,
+                'address': building.address,
+                'city': building.city,
+            },
+            'owner': {
+                'id': str(owner.id),
+                'name': owner.name or '',
+                'phone': owner.phone or '',
+                'whatsapp': owner_whatsapp,
+            },
+        },
+    ).data
+
+
+class MyTenanciesView(APIView):
+    """GET /tenancies/mine/ — active (and optional past) tenancies for the logged-in renter."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        status_filter = (request.query_params.get('status') or 'active').lower()
+        qs = (
+            Tenancy.objects.filter(tenant=request.user)
+            .select_related(
+                'flat',
+                'flat__building',
+                'flat__building__owner',
+            )
+            .order_by('-start_date')
+        )
+        if status_filter == 'active':
+            qs = qs.filter(status=TenancyStatus.ACTIVE)
+        elif status_filter == 'ended':
+            qs = qs.filter(status=TenancyStatus.ENDED)
+        elif status_filter not in ('all', ''):
+            raise InvalidError('status must be active, ended, or all.')
+
+        payload = [_serialize_my_tenancy(t) for t in qs]
+        return Response(api_success(payload))
 
 
 class RenterListView(APIView):
@@ -449,12 +604,16 @@ class PortfolioSnapshotView(APIView):
             .select_related('building')
             .prefetch_related('tenancies')
         )
+        messes = Mess.objects.filter(
+            owner=request.user,
+            is_deleted=False,
+        ).order_by('-created_at')
         return Response(
             api_success(
                 {
                     'buildings': BuildingSerializer(buildings, many=True).data,
                     'flats': FlatSerializer(flats, many=True).data,
-                    'messList': [],
+                    'messList': MessSerializer(messes, many=True).data,
                 },
             ),
         )

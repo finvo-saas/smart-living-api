@@ -1,5 +1,6 @@
 from django.contrib import admin
 
+from core.admin import TimestampedModelAdmin
 from mess.models import (
     AttendanceRecord,
     DailyMenu,
@@ -31,7 +32,7 @@ from mess.models import (
 
 
 @admin.register(Mess)
-class MessAdmin(admin.ModelAdmin):
+class MessAdmin(TimestampedModelAdmin):
     list_display = (
         'name',
         'city',
@@ -46,13 +47,13 @@ class MessAdmin(admin.ModelAdmin):
 
 
 @admin.register(Seat)
-class SeatAdmin(admin.ModelAdmin):
+class SeatAdmin(TimestampedModelAdmin):
     list_display = ('seat_number', 'room_number', 'mess', 'status')
     list_filter = ('status',)
 
 
 @admin.register(MessStudent)
-class MessStudentAdmin(admin.ModelAdmin):
+class MessStudentAdmin(TimestampedModelAdmin):
     list_display = (
         'name',
         'mess',
@@ -73,23 +74,54 @@ class MessStudentAdmin(admin.ModelAdmin):
 
 
 @admin.register(MessNotice)
-class MessNoticeAdmin(admin.ModelAdmin):
+class MessNoticeAdmin(TimestampedModelAdmin):
     list_display = ('title', 'mess', 'priority', 'date', 'category')
     list_filter = ('priority', 'category')
 
 
-admin.site.register(MessNoticeAck)
-admin.site.register(DailyMenu)
-admin.site.register(WeeklySchedule)
-admin.site.register(MealTiming)
-admin.site.register(MealPreference)
-admin.site.register(AttendanceRecord)
-admin.site.register(SMSTemplate)
-admin.site.register(SMSGroup)
+@admin.register(MessNoticeAck)
+class MessNoticeAckAdmin(TimestampedModelAdmin):
+    list_display = ('notice', 'user', 'user_name', 'acknowledged_at')
+
+
+@admin.register(DailyMenu)
+class DailyMenuAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'date')
+
+
+@admin.register(WeeklySchedule)
+class WeeklyScheduleAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'week_start_date', 'week_end_date', 'is_active')
+
+
+@admin.register(MealTiming)
+class MealTimingAdmin(TimestampedModelAdmin):
+    list_display = ('mess',)
+
+
+@admin.register(MealPreference)
+class MealPreferenceAdmin(TimestampedModelAdmin):
+    list_display = ('user', 'mess')
+
+
+@admin.register(AttendanceRecord)
+class AttendanceRecordAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'student', 'date', 'status')
+    list_filter = ('status',)
+
+
+@admin.register(SMSTemplate)
+class SMSTemplateAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'name', 'category')
+
+
+@admin.register(SMSGroup)
+class SMSGroupAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'name')
 
 
 @admin.register(SMSMessage)
-class SMSMessageAdmin(admin.ModelAdmin):
+class SMSMessageAdmin(TimestampedModelAdmin):
     list_display = (
         'id',
         'mess',
@@ -104,11 +136,10 @@ class SMSMessageAdmin(admin.ModelAdmin):
     )
     list_filter = ('status', 'gateway', 'recipient_type')
     search_fields = ('content', 'mess__name', 'sent_by__phone')
-    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(SMSCreditPackage)
-class SMSCreditPackageAdmin(admin.ModelAdmin):
+class SMSCreditPackageAdmin(TimestampedModelAdmin):
     list_display = (
         'package_key',
         'label',
@@ -122,7 +153,7 @@ class SMSCreditPackageAdmin(admin.ModelAdmin):
 
 
 @admin.register(OwnerSMSAccount)
-class OwnerSMSAccountAdmin(admin.ModelAdmin):
+class OwnerSMSAccountAdmin(TimestampedModelAdmin):
     list_display = (
         'owner',
         'balance',
@@ -135,23 +166,58 @@ class OwnerSMSAccountAdmin(admin.ModelAdmin):
 
 
 @admin.register(SMSCreditLedger)
-class SMSCreditLedgerAdmin(admin.ModelAdmin):
-    list_display = ('account', 'entry_type', 'credits', 'balance_after', 'created_at')
+class SMSCreditLedgerAdmin(TimestampedModelAdmin):
+    list_display = ('account', 'entry_type', 'credits', 'balance_after')
     list_filter = ('entry_type',)
 
 
 @admin.register(SMSCreditPurchase)
-class SMSCreditPurchaseAdmin(admin.ModelAdmin):
+class SMSCreditPurchaseAdmin(TimestampedModelAdmin):
     list_display = ('owner', 'package_id', 'credits', 'amount_bdt', 'status', 'paid_at')
     list_filter = ('status', 'package_id')
 
 
-admin.site.register(MessRule)
-admin.site.register(RuleAcceptance)
-admin.site.register(RuleViolation)
-admin.site.register(MessExpense)
-admin.site.register(MemberMealLog)
-admin.site.register(MealOffRequest)
-admin.site.register(MemberDeposit)
-admin.site.register(MessMonthClose)
-admin.site.register(MemberMonthBill)
+@admin.register(MessRule)
+class MessRuleAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'title', 'status')
+
+
+@admin.register(RuleAcceptance)
+class RuleAcceptanceAdmin(TimestampedModelAdmin):
+    list_display = ('rule', 'student', 'accepted_at')
+
+
+@admin.register(RuleViolation)
+class RuleViolationAdmin(TimestampedModelAdmin):
+    list_display = ('rule', 'student', 'status')
+
+
+@admin.register(MessExpense)
+class MessExpenseAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'category', 'description', 'amount', 'date')
+
+
+@admin.register(MemberMealLog)
+class MemberMealLogAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'student', 'date')
+
+
+@admin.register(MealOffRequest)
+class MealOffRequestAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'student', 'status', 'start_date', 'end_date')
+    list_filter = ('status',)
+
+
+@admin.register(MemberDeposit)
+class MemberDepositAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'student', 'amount', 'date', 'status')
+
+
+@admin.register(MessMonthClose)
+class MessMonthCloseAdmin(TimestampedModelAdmin):
+    list_display = ('mess', 'year', 'month', 'status')
+
+
+@admin.register(MemberMonthBill)
+class MemberMonthBillAdmin(TimestampedModelAdmin):
+    list_display = ('month_close', 'student', 'student_name', 'meal_cost')

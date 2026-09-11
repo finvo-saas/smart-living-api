@@ -1,16 +1,17 @@
 from django.contrib import admin
 
-from subscriptions.models import FeaturedBoost, OwnerSubscription, SubscriptionPlan
+from core.admin import TimestampedModelAdmin
+from subscriptions.models import AdCampaign, FeaturedBoost, OwnerSubscription, SubscriptionPlan
 
 
 @admin.register(SubscriptionPlan)
-class SubscriptionPlanAdmin(admin.ModelAdmin):
+class SubscriptionPlanAdmin(TimestampedModelAdmin):
     list_display = ('name', 'tier', 'price', 'max_flats', 'highlighted', 'is_active')
     list_filter = ('tier', 'is_active', 'highlighted')
 
 
 @admin.register(OwnerSubscription)
-class OwnerSubscriptionAdmin(admin.ModelAdmin):
+class OwnerSubscriptionAdmin(TimestampedModelAdmin):
     list_display = (
         'owner',
         'plan',
@@ -23,7 +24,7 @@ class OwnerSubscriptionAdmin(admin.ModelAdmin):
 
 
 @admin.register(FeaturedBoost)
-class FeaturedBoostAdmin(admin.ModelAdmin):
+class FeaturedBoostAdmin(TimestampedModelAdmin):
     list_display = (
         'owner',
         'property',
@@ -33,3 +34,10 @@ class FeaturedBoostAdmin(admin.ModelAdmin):
         'paid_at',
     )
     search_fields = ('owner__phone', 'property__name')
+
+
+@admin.register(AdCampaign)
+class AdCampaignAdmin(TimestampedModelAdmin):
+    list_display = ('name', 'owner', 'target_type', 'status')
+    list_filter = ('target_type', 'status')
+    search_fields = ('name', 'owner__phone')

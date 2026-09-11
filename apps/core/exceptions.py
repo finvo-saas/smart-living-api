@@ -32,6 +32,12 @@ class ForbiddenError(EnvelopeAPIException):
     default_code = 'FORBIDDEN'
 
 
+class UnauthorizedError(EnvelopeAPIException):
+    status_code = status.HTTP_401_UNAUTHORIZED
+    default_detail = 'Authentication required.'
+    default_code = 'UNAUTHORIZED'
+
+
 class InvalidError(EnvelopeAPIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = 'Invalid request.'

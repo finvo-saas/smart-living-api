@@ -1,4 +1,4 @@
-"""Background billing jobs (overdue marking, etc.)."""
+"""Background billing jobs (overdue marking, automation rules)."""
 
 from celery import shared_task
 from django.utils import timezone
@@ -18,3 +18,15 @@ def mark_overdue_bills() -> dict:
         ).update(status=BillStatus.OVERDUE)
     )
     return {'updated': updated, 'asOf': today.isoformat()}
+
+
+@shared_task(name='billing.run_bill_generation_rules')
+def run_bill_generation_rules() -> dict:
+    """
+    Execute due automation rules and create bills from their templates.
+
+    Safe to run daily (or more often); each rule advances next_run after a cycle.
+    """
+    from billing.services.scheduler import run_due_bill_rules
+
+    return run_due_bill_rules()

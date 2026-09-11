@@ -42,6 +42,14 @@ def _renter_from_tenancy(tenancy: Tenancy | None) -> dict | None:
     if not tenancy:
         return None
     tenant = tenancy.tenant
+    from core.services.media import media_storage
+
+    photo_url = ''
+    if tenant and getattr(tenant, 'profile_photo', None) and tenant.profile_photo:
+        try:
+            photo_url = media_storage.absolute_url(tenant.profile_photo.url)
+        except Exception:  # noqa: BLE001
+            photo_url = ''
     return {
         'id': str(tenant.id),
         'name': tenancy.tenant_name or tenant.name or f'User {tenant.phone[-4:]}',
@@ -51,6 +59,8 @@ def _renter_from_tenancy(tenancy: Tenancy | None) -> dict | None:
         'nid': tenancy.tenant_nid or None,
         'address': tenancy.tenant_address or None,
         'joinedDate': tenancy.start_date.isoformat(),
+        'photoUrl': photo_url or None,
+        'profilePhotoUrl': photo_url or None,
     }
 
 
@@ -59,7 +69,10 @@ class FlatSerializer(serializers.ModelSerializer):
     floor = serializers.IntegerField(source='floor_number')
     rent = serializers.SerializerMethodField()
     buildingId = serializers.UUIDField(source='building_id', read_only=True)
+    listingId = serializers.UUIDField(source='listing_id', read_only=True, allow_null=True)
     renter = serializers.SerializerMethodField()
+    deposit = serializers.SerializerMethodField()
+    tenancyId = serializers.SerializerMethodField()
 
     class Meta:
         model = Flat
@@ -70,24 +83,44 @@ class FlatSerializer(serializers.ModelSerializer):
             'rent',
             'status',
             'buildingId',
+            'listingId',
             'renter',
             'area',
             'bedrooms',
             'bathrooms',
+            'deposit',
+            'tenancyId',
         )
+
+    def _tenancy(self, obj: Flat):
+        if hasattr(obj, '_cached_active_tenancy'):
+            return obj._cached_active_tenancy
+        tenancy = _active_tenancy(obj)
+        obj._cached_active_tenancy = tenancy
+        return tenancy
 
     def get_rent(self, obj):
         return _money(obj.rent)
 
     def get_renter(self, obj):
-        tenancy = _active_tenancy(obj)
-        return _renter_from_tenancy(tenancy)
+        return _renter_from_tenancy(self._tenancy(obj))
+
+    def get_deposit(self, obj):
+        tenancy = self._tenancy(obj)
+        if not tenancy or tenancy.deposit is None:
+            return None
+        return _money(tenancy.deposit)
+
+    def get_tenancyId(self, obj):
+        tenancy = self._tenancy(obj)
+        return str(tenancy.id) if tenancy else None
 
 
 class FlatWriteSerializer(serializers.ModelSerializer):
     flatNumber = serializers.CharField(source='flat_number')
     floor = serializers.IntegerField(source='floor_number', required=False, default=1)
     buildingId = serializers.UUIDField(source='building_id', required=False)
+    listingId = serializers.UUIDField(required=False, allow_null=True)
     rent = serializers.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
@@ -98,6 +131,7 @@ class FlatWriteSerializer(serializers.ModelSerializer):
             'rent',
             'status',
             'buildingId',
+            'listingId',
             'area',
             'bedrooms',
             'bathrooms',
@@ -108,10 +142,21 @@ class FlatWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Rent must be zero or positive.')
         return value
 
+    def create(self, validated_data):
+        listing_id = validated_data.pop('listingId', None)
+        flat = super().create(validated_data)
+        if listing_id is not None:
+            from listings.services.inventory import attach_listing_to_flat
+
+            attach_listing_to_flat(flat, listing_id)
+            flat.refresh_from_db()
+        return flat
+
 
 class FlatPatchSerializer(serializers.ModelSerializer):
     flatNumber = serializers.CharField(source='flat_number', required=False)
     floor = serializers.IntegerField(source='floor_number', required=False)
+    listingId = serializers.UUIDField(required=False, allow_null=True)
     rent = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -125,10 +170,21 @@ class FlatPatchSerializer(serializers.ModelSerializer):
             'floor',
             'rent',
             'status',
+            'listingId',
             'area',
             'bedrooms',
             'bathrooms',
         )
+
+    def update(self, instance, validated_data):
+        listing_id = validated_data.pop('listingId', serializers.empty)
+        flat = super().update(instance, validated_data)
+        if listing_id is not serializers.empty:
+            from listings.services.inventory import attach_listing_to_flat
+
+            attach_listing_to_flat(flat, listing_id)
+            flat.refresh_from_db()
+        return flat
 
 
 class BuildingSerializer(serializers.ModelSerializer):
@@ -263,6 +319,37 @@ class AssignRenterSerializer(serializers.Serializer):
     nid = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
     joinedDate = serializers.DateField(required=False)
+    deposit = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class VacateFlatSerializer(serializers.Serializer):
+    advanceNote = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    depositReturned = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+
+
+class MyTenancySerializer(serializers.Serializer):
+    """Tenant-facing active/past tenancy card payload."""
+
+    id = serializers.UUIDField()
+    status = serializers.CharField()
+    startDate = serializers.CharField()
+    endDate = serializers.CharField(allow_null=True, required=False)
+    deposit = serializers.FloatField(allow_null=True, required=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    flat = serializers.DictField()
+    building = serializers.DictField()
+    owner = serializers.DictField()
 
 
 class FloorStatsSerializer(serializers.Serializer):

@@ -1,13 +1,16 @@
-from django.urls import path
+from django.urls import path, re_path
 
 from billing.views import (
     ActiveBillRulesView,
     ActiveBillTemplatesView,
     BillDetailView,
+    BillDueRemindView,
     BillRulesBulkView,
     BillTemplatesBulkView,
     BillTemplatesByPropertyView,
+    BillWhatsAppShareView,
     BillsBoardView,
+    BillsBulkDueRemindView,
     BillsBulkView,
     BulkGenerateBillsView,
     CurrentMeterReadingView,
@@ -16,6 +19,7 @@ from billing.views import (
     MeterReadingsBulkView,
     OwnerBillsView,
     PreviousMeterReadingView,
+    PublicBillPdfView,
     TenantBillsView,
 )
 
@@ -28,6 +32,26 @@ urlpatterns = [
     path('bills/bulk-generate/', BulkGenerateBillsView.as_view(), name='bills-bulk-generate'),
     path('bills/<uuid:pk>/', BillDetailView.as_view(), name='bill-detail'),
     path('bills/<uuid:pk>/mark-paid/', MarkBillPaidView.as_view(), name='bill-mark-paid'),
+    path(
+        'bills/<uuid:pk>/whatsapp-share/',
+        BillWhatsAppShareView.as_view(),
+        name='bill-whatsapp-share',
+    ),
+    path(
+        'bills/<uuid:pk>/due-remind/',
+        BillDueRemindView.as_view(),
+        name='bill-due-remind',
+    ),
+    path(
+        'bills/bulk-due-remind/',
+        BillsBulkDueRemindView.as_view(),
+        name='bills-bulk-due-remind',
+    ),
+    re_path(
+        r'^public/bills/(?P<property_slug>[-a-zA-Z0-9_]+)/(?P<file_id>[a-fA-F0-9]+)\.pdf$',
+        PublicBillPdfView.as_view(),
+        name='public-bill-pdf',
+    ),
     path('bill-templates/bulk/', BillTemplatesBulkView.as_view(), name='bill-templates-bulk'),
     path(
         'bill-templates/active/',

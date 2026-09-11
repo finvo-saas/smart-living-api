@@ -10,11 +10,12 @@ from accounts.models import (
     VerificationDocument,
 )
 from accounts.phone import normalize_bd_phone
+from core.admin import TimestampedModelAdmin
 from core.exceptions import InvalidError
 
 
 @admin.register(User)
-class UserAdmin(admin.ModelAdmin):
+class UserAdmin(TimestampedModelAdmin):
     list_display = (
         'phone',
         'name',
@@ -25,7 +26,6 @@ class UserAdmin(admin.ModelAdmin):
         'is_phone_verified',
         'pin_set_at',
         'is_active',
-        'created_at',
     )
     list_filter = (
         'role',
@@ -50,34 +50,33 @@ class UserAdmin(admin.ModelAdmin):
 
 
 @admin.register(UserProfile)
-class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'updated_at')
+class UserProfileAdmin(TimestampedModelAdmin):
+    list_display = ('user',)
     search_fields = ('user__phone', 'user__name')
 
 
 @admin.register(AdminProfile)
-class AdminProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'admin_role', 'is_active', 'created_at')
+class AdminProfileAdmin(TimestampedModelAdmin):
+    list_display = ('user', 'admin_role', 'is_active')
     list_filter = ('admin_role', 'is_active')
     search_fields = ('user__phone',)
 
 
 @admin.register(OTPChallenge)
-class OTPChallengeAdmin(admin.ModelAdmin):
-    list_display = ('phone', 'purpose', 'attempts', 'expires_at', 'consumed_at', 'created_at')
+class OTPChallengeAdmin(TimestampedModelAdmin):
+    list_display = ('phone', 'purpose', 'attempts', 'expires_at', 'consumed_at')
     list_filter = ('purpose',)
     search_fields = ('phone',)
     readonly_fields = ('code_hash',)
 
 
 @admin.register(VerificationDocument)
-class VerificationDocumentAdmin(admin.ModelAdmin):
+class VerificationDocumentAdmin(TimestampedModelAdmin):
     list_display = (
         'user',
         'verification_type',
         'document_number',
         'status',
-        'created_at',
         'reviewed_at',
     )
     list_filter = ('verification_type', 'status')
@@ -85,20 +84,19 @@ class VerificationDocumentAdmin(admin.ModelAdmin):
 
 
 @admin.register(RoommateProfile)
-class RoommateProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'looking', 'city', 'occupation', 'updated_at')
+class RoommateProfileAdmin(TimestampedModelAdmin):
+    list_display = ('user', 'looking', 'city', 'occupation')
     list_filter = ('looking', 'occupation', 'city')
     search_fields = ('user__phone', 'user__name', 'city', 'area')
 
 
 @admin.register(TrustedDevice)
-class TrustedDeviceAdmin(admin.ModelAdmin):
+class TrustedDeviceAdmin(TimestampedModelAdmin):
     list_display = (
         'user',
         'expires_at',
         'last_used_at',
         'revoked_at',
-        'created_at',
     )
     list_filter = ('revoked_at',)
     search_fields = ('user__phone',)

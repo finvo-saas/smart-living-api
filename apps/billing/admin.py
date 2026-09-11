@@ -8,15 +8,17 @@ from billing.models import (
     BillTemplateItem,
     MeterReading,
 )
+from core.admin import TimestampedModelAdmin
 
 
 class BillItemInline(admin.TabularInline):
     model = BillItem
     extra = 0
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(Bill)
-class BillAdmin(admin.ModelAdmin):
+class BillAdmin(TimestampedModelAdmin):
     list_display = (
         'tenant_name',
         'property_name',
@@ -34,10 +36,11 @@ class BillAdmin(admin.ModelAdmin):
 class BillTemplateItemInline(admin.TabularInline):
     model = BillTemplateItem
     extra = 0
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(BillTemplate)
-class BillTemplateAdmin(admin.ModelAdmin):
+class BillTemplateAdmin(TimestampedModelAdmin):
     list_display = ('name', 'property_id', 'property_type', 'is_active', 'owner')
     list_filter = ('property_type', 'is_active')
     search_fields = ('name', 'owner__phone')
@@ -45,14 +48,14 @@ class BillTemplateAdmin(admin.ModelAdmin):
 
 
 @admin.register(BillGenerationRule)
-class BillGenerationRuleAdmin(admin.ModelAdmin):
+class BillGenerationRuleAdmin(TimestampedModelAdmin):
     list_display = ('name', 'template', 'is_active', 'owner', 'next_run')
     list_filter = ('is_active',)
     search_fields = ('name', 'owner__phone')
 
 
 @admin.register(MeterReading)
-class MeterReadingAdmin(admin.ModelAdmin):
+class MeterReadingAdmin(TimestampedModelAdmin):
     list_display = (
         'property_id',
         'flat',

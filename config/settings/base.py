@@ -142,7 +142,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Dhaka'
 USE_I18N = True
 USE_TZ = True
 
@@ -229,6 +229,12 @@ if CELERY_BEAT_ENABLED:
         'mark-overdue-bills-hourly': {
             'task': 'billing.mark_overdue_bills',
             'schedule': 3600.0,
+        },
+        'run-bill-generation-rules-daily': {
+            'task': 'billing.run_bill_generation_rules',
+            # Local morning window — rules with generateBeforeDays still catch up
+            # if beat was briefly down (up to MAX_CATCHUP_CYCLES).
+            'schedule': crontab(hour=1, minute=15),
         },
         'dispatch-due-reminders-every-5-min': {
             'task': 'reports.dispatch_due_reminders',
@@ -444,6 +450,8 @@ PAYMENT_SANDBOX_AUTO_COMPLETE = os.environ.get(
     'true' if DEBUG else 'false',
 ).lower() == 'true'
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+# Public absolute API base (include /api/v1). Used for branded bill PDF links.
+PUBLIC_API_URL = os.environ.get('PUBLIC_API_URL', '').strip().rstrip('/')
 PUSH_ENABLED = _env_bool('PUSH_ENABLED', True)
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '').strip()
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '').strip()

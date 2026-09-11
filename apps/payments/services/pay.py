@@ -19,6 +19,7 @@ from payments.models import (
     PaymentTransactionStatus,
 )
 from payments.services.helpers import (
+    bill_paid_total,
     complete_transaction,
     get_or_create_collection_settings,
     should_create_payout,
@@ -43,6 +44,63 @@ def _validate_account(method: str, account_number: str | None) -> None:
     digits = ''.join(c for c in (account_number or '') if c.isdigit())
     if len(digits) < 11:
         raise InvalidAccountError('Enter a valid wallet / account number.')
+
+
+def _pay_bill_cash(
+    user,
+    bill: Bill,
+    *,
+    amount: Decimal,
+    bill_name: str,
+    property_name: str,
+    tenant_name: str,
+    idempotency_key: str,
+    note: str = '',
+) -> PaymentTransaction:
+    """
+    Cash is never auto-completed: create an “I paid” claim + pending txn.
+    Owner confirms on Payments → Claims (or Record cash on Bills).
+    """
+    from payments.services.claims import create_bill_claim
+
+    remaining = bill.amount - bill_paid_total(bill)
+    if remaining <= 0:
+        raise InvalidError('Bill is already paid.')
+    claim_amount = amount if amount <= remaining else remaining
+
+    claim = create_bill_claim(
+        user,
+        {
+            'billId': bill.id,
+            'amount': claim_amount,
+            'paymentMethod': PaymentMethod.CASH,
+            'note': note
+            or 'Cash payment — awaiting owner confirmation of receipt',
+        },
+    )
+
+    txn_id = f'CASH-CLAIM-{str(claim.id).replace("-", "")[:12].upper()}'
+    txn = PaymentTransaction.objects.create(
+        user=user,
+        bill=bill,
+        bill_name=bill_name,
+        property_name=property_name,
+        tenant_name=tenant_name,
+        amount=claim_amount,
+        payment_method=PaymentMethod.CASH,
+        account_number='',
+        transaction_id=txn_id,
+        status=PaymentTransactionStatus.PENDING,
+        idempotency_key=idempotency_key or None,
+        gateway_payload={
+            'claimId': str(claim.id),
+            'awaitingOwnerConfirm': True,
+            'manualCash': True,
+        },
+    )
+    claim.payment_transaction = txn
+    claim.save(update_fields=['payment_transaction', 'updated_at'])
+    return txn
 
 
 @transaction.atomic
@@ -71,17 +129,33 @@ def pay_bill(user, data: dict) -> PaymentTransaction:
     if bill.status == BillStatus.PAID:
         raise InvalidError('Bill is already paid.')
 
+    bill_name = (
+        data.get('billName')
+        or data.get('bill_name')
+        or f'{bill.month} {bill.year} — {bill.property_name}'
+    )
+    property_name = data.get('propertyName') or data.get('property_name') or bill.property_name
+    tenant_name = data.get('tenantName') or data.get('tenant_name') or bill.tenant_name
+
+    if payment_method == PaymentMethod.CASH:
+        return _pay_bill_cash(
+            user,
+            bill,
+            amount=amount,
+            bill_name=bill_name,
+            property_name=property_name,
+            tenant_name=tenant_name,
+            idempotency_key=idempotency_key,
+            note=(data.get('note') or '').strip(),
+        )
+
     cfg = get_or_create_collection_settings(bill.owner)
-    # Manual mode: tenants should use “I paid” claims, not platform gateway checkout.
+    # Manual mode: digital methods use “I paid” claims, not platform gateway checkout.
     if cfg.collection_mode == CollectionMode.MANUAL and not should_create_payout(bill.owner):
         raise InvalidError(
             'Owner collects manually. Use “I paid” with your TrxID, or ask the owner '
             'to enable their merchant gateway.'
         )
-
-    bill_name = data.get('billName') or data.get('bill_name') or f'{bill.month} {bill.year} — {bill.property_name}'
-    property_name = data.get('propertyName') or data.get('property_name') or bill.property_name
-    tenant_name = data.get('tenantName') or data.get('tenant_name') or bill.tenant_name
 
     owner_cred = None
     method_to_gateway = {

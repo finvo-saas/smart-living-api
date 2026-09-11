@@ -11,16 +11,22 @@ from core.exceptions import ForbiddenError, NotFoundError
 from hotels.models import HotelBooking
 from mess.models import MessStudent
 from portfolio.models import Tenancy, TenancyStatus
-from support.models import Complaint, ComplaintStatus
+from support.models import Complaint, ComplaintMessage, ComplaintStatus
 from support.serializers import (
     ComplaintCreateSerializer,
+    ComplaintMessageCreateSerializer,
+    ComplaintMessageSerializer,
     ComplaintSerializer,
     ComplaintStatusUpdateSerializer,
 )
 
 
 def _complaint_qs():
-    return Complaint.objects.filter(is_deleted=False).select_related('user')
+    return (
+        Complaint.objects.filter(is_deleted=False)
+        .select_related('user', 'building', 'flat')
+        .prefetch_related('messages')
+    )
 
 
 def _get_complaint(pk):
@@ -59,7 +65,30 @@ def _tenant_user_ids_for_owner(owner):
 def _owner_complaints_qs(owner):
     """An owner sees their own complaints plus those raised by their renters."""
     return _complaint_qs().filter(
-        Q(user_id__in=_tenant_user_ids_for_owner(owner)) | Q(user=owner),
+        Q(user_id__in=_tenant_user_ids_for_owner(owner))
+        | Q(user=owner)
+        | Q(building__owner=owner),
+    )
+
+
+def _can_access_complaint(user, complaint: Complaint) -> bool:
+    if user.role == Role.ADMIN:
+        return True
+    if complaint.user_id == user.id:
+        return True
+    if user.role == Role.OWNER and (
+        complaint.user_id in _tenant_user_ids_for_owner(user)
+        or (complaint.building_id and complaint.building.owner_id == user.id)
+    ):
+        return True
+    return False
+
+
+def _is_managing_owner(user, complaint: Complaint) -> bool:
+    if user.role != Role.OWNER:
+        return False
+    return complaint.user_id in _tenant_user_ids_for_owner(user) or (
+        complaint.building_id and complaint.building.owner_id == user.id
     )
 
 
@@ -73,7 +102,6 @@ class ComplaintListCreateView(APIView):
         if user.role == Role.ADMIN:
             qs = _complaint_qs() if owner_view else _complaint_qs().filter(user=user)
         elif user.role == Role.OWNER:
-            # ownerView never widens scope beyond the owner's own renters.
             qs = _owner_complaints_qs(user)
         else:
             qs = _complaint_qs().filter(user=user)
@@ -85,6 +113,7 @@ class ComplaintListCreateView(APIView):
         ser = ComplaintCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         complaint = ser.create_complaint(request.user)
+        complaint = _get_complaint(complaint.id)
         return Response(
             api_success(ComplaintSerializer(complaint).data),
             status=status.HTTP_201_CREATED,
@@ -98,10 +127,7 @@ class ComplaintStatusUpdateView(APIView):
         complaint = _get_complaint(pk)
         user = request.user
         is_creator = complaint.user_id == user.id
-        is_managing_owner = (
-            user.role == Role.OWNER
-            and complaint.user_id in _tenant_user_ids_for_owner(user)
-        )
+        is_managing_owner = _is_managing_owner(user, complaint)
         is_staff = user.role == Role.ADMIN or is_managing_owner
 
         if not is_staff and not is_creator:
@@ -115,12 +141,69 @@ class ComplaintStatusUpdateView(APIView):
             raise ForbiddenError('Only owners or admins can change complaint status.')
 
         complaint.status = new_status
-        if 'response' in ser.validated_data:
-            complaint.response = ser.validated_data['response']
+        if 'response' in ser.validated_data and ser.validated_data.get('response'):
+            reply = ser.validated_data['response'].strip()
+            complaint.response = reply
+            # Also append to thread
+            ComplaintMessage.objects.create(
+                complaint=complaint,
+                author=user,
+                body=reply,
+                is_staff_reply=is_staff,
+            )
         if new_status == ComplaintStatus.RESOLVED:
             complaint.resolved_at = timezone.now()
         elif new_status != ComplaintStatus.RESOLVED:
             complaint.resolved_at = None
         complaint.save()
 
+        complaint = _get_complaint(complaint.id)
         return Response(api_success(ComplaintSerializer(complaint).data))
+
+
+class ComplaintMessageListCreateView(APIView):
+    """Thread replies on a maintenance / complaint ticket."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        complaint = _get_complaint(pk)
+        if not _can_access_complaint(request.user, complaint):
+            raise ForbiddenError('You cannot view this complaint.')
+        messages = complaint.messages.all().order_by('created_at')
+        return Response(
+            api_success(ComplaintMessageSerializer(messages, many=True).data),
+        )
+
+    def post(self, request, pk):
+        complaint = _get_complaint(pk)
+        if not _can_access_complaint(request.user, complaint):
+            raise ForbiddenError('You cannot reply to this complaint.')
+        if complaint.status == ComplaintStatus.RESOLVED:
+            # Re-open on new message from either side
+            complaint.status = ComplaintStatus.IN_PROGRESS
+            complaint.resolved_at = None
+            complaint.save(update_fields=['status', 'resolved_at', 'updated_at'])
+
+        ser = ComplaintMessageCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        is_staff = request.user.role == Role.ADMIN or _is_managing_owner(
+            request.user,
+            complaint,
+        )
+        msg = ComplaintMessage.objects.create(
+            complaint=complaint,
+            author=request.user,
+            body=ser.validated_data['body'].strip(),
+            is_staff_reply=is_staff,
+        )
+        if is_staff:
+            complaint.response = msg.body
+            if complaint.status == ComplaintStatus.OPEN:
+                complaint.status = ComplaintStatus.IN_PROGRESS
+            complaint.save(update_fields=['response', 'status', 'updated_at'])
+
+        return Response(
+            api_success(ComplaintMessageSerializer(msg).data),
+            status=status.HTTP_201_CREATED,
+        )

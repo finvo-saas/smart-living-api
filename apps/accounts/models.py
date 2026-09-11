@@ -73,7 +73,7 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
     owner_enabled_verticals = models.JSONField(
         default=list,
         blank=True,
-        help_text='Enabled owner verticals: mess, apartment, hotel.',
+        help_text='Enabled owner vertical (single): mess, apartment, or hotel.',
     )
     owner_focus_selected = models.BooleanField(
         default=False,
@@ -117,7 +117,14 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
         if not isinstance(raw, list):
             return []
         allowed = {c.value for c in OwnerVertical}
-        return [str(v) for v in raw if str(v) in allowed]
+        verticals = [str(v) for v in raw if str(v) in allowed]
+        if len(verticals) <= 1:
+            return verticals
+        # Single-business policy: prefer primary when valid.
+        primary = self.owner_primary_focus or ''
+        if primary in verticals:
+            return [primary]
+        return [verticals[0]]
 
     def has_owner_vertical(self, vertical: str) -> bool:
         if self.role != Role.OWNER:

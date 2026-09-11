@@ -11,6 +11,7 @@ per product area, so a caller only picks a ``kind``::
         mess/photos/…          mess/members/…
         hotels/photos/…
         users/profiles/…
+        media/bills/…          (public bill PDFs for WhatsApp share)
         notices/…              support/complaints/…      chat/attachments/…
         documents/…            verification/…            (private, signed URLs)
 
@@ -79,6 +80,9 @@ KIND_RULES: dict[str, MediaKind] = {
     'profile': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'users/profiles'),
     # Shared product areas
     'notice': MediaKind(DOCUMENT_TYPES, MAX_DOCUMENT_BYTES, 'notices'),
+    # Public bill PDFs on Spaces: {STORAGE_ROOT_FOLDER}/media/bills/<uuid>.pdf
+    # WhatsApp recipients must open without auth (public-read ACL).
+    'bill': MediaKind(DOCUMENT_TYPES, MAX_DOCUMENT_BYTES, 'media/bills'),
     'complaint': MediaKind(IMAGE_TYPES, MAX_IMAGE_BYTES, 'support/complaints'),
     'chat': MediaKind(CHAT_TYPES, MAX_DOCUMENT_BYTES, 'chat/attachments'),
     # Private — served as short-lived signed URLs, never public
@@ -102,6 +106,8 @@ LEGACY_FOLDERS: tuple[str, ...] = (
     'hotels',
     'documents',
     'verification',
+    # Short-lived layout before media/bills/
+    'bills',
 )
 
 

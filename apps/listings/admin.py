@@ -1,15 +1,17 @@
 from django.contrib import admin
 
+from core.admin import TimestampedModelAdmin
 from listings.models import Property, PropertyImage, PropertyReview
 
 
 class PropertyImageInline(admin.TabularInline):
     model = PropertyImage
     extra = 0
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(Property)
-class PropertyAdmin(admin.ModelAdmin):
+class PropertyAdmin(TimestampedModelAdmin):
     list_display = (
         'name',
         'type',
@@ -28,14 +30,13 @@ class PropertyAdmin(admin.ModelAdmin):
 
 
 @admin.register(PropertyReview)
-class PropertyReviewAdmin(admin.ModelAdmin):
+class PropertyReviewAdmin(TimestampedModelAdmin):
     list_display = (
         'property',
         'user',
         'rating',
         'cleanliness',
         'security',
-        'created_at',
     )
     list_filter = ('rating',)
     search_fields = ('property__name', 'user__phone', 'comment')

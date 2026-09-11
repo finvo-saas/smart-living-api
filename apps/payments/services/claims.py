@@ -208,7 +208,11 @@ def list_claims_for_user(user) -> list[dict]:
 def review_claim(owner, claim_id, *, approve: bool, reason: str = '') -> PaymentClaim:
     try:
         claim = PaymentClaim.objects.select_related(
-            'bill', 'mess', 'student', 'member_deposit'
+            'bill',
+            'mess',
+            'student',
+            'member_deposit',
+            'payment_transaction',
         ).get(pk=claim_id)
     except PaymentClaim.DoesNotExist as exc:
         raise NotFoundError('Claim not found.') from exc
@@ -235,27 +239,49 @@ def review_claim(owner, claim_id, *, approve: bool, reason: str = '') -> Payment
             dep = claim.member_deposit
             dep.status = DepositStatus.REJECTED
             dep.save(update_fields=['status', 'updated_at'])
+        pending_txn = claim.payment_transaction
+        if (
+            pending_txn
+            and pending_txn.status == PaymentTransactionStatus.PENDING
+        ):
+            pending_txn.status = PaymentTransactionStatus.FAILED
+            pending_txn.failure_reason = claim.rejection_reason
+            pending_txn.save(
+                update_fields=['status', 'failure_reason', 'updated_at'],
+            )
         return claim
 
     claim.status = PaymentClaimStatus.CONFIRMED
     claim.save()
 
     if claim.bill_id:
-        txn, _ = record_cash(
-            owner,
-            {
-                'billId': claim.bill_id,
-                'amount': claim.amount,
-                'paymentMethod': claim.payment_method,
-                'transactionId': claim.transaction_id,
-                'receivedDate': timezone.localdate().isoformat(),
-                'receiptNote': claim.note or 'Confirmed payment claim',
-                'tenantName': claim.bill.tenant_name,
-                'propertyName': claim.bill.property_name,
-            },
-        )
-        claim.payment_transaction = txn
-        claim.save(update_fields=['payment_transaction', 'updated_at'])
+        pending_txn = claim.payment_transaction
+        if (
+            pending_txn
+            and pending_txn.status == PaymentTransactionStatus.PENDING
+        ):
+            if claim.note:
+                pending_txn.receipt_note = claim.note
+                pending_txn.save(update_fields=['receipt_note', 'updated_at'])
+            from payments.services.helpers import complete_transaction
+
+            complete_transaction(pending_txn)
+        else:
+            txn, _ = record_cash(
+                owner,
+                {
+                    'billId': claim.bill_id,
+                    'amount': claim.amount,
+                    'paymentMethod': claim.payment_method,
+                    'transactionId': claim.transaction_id,
+                    'receivedDate': timezone.localdate().isoformat(),
+                    'receiptNote': claim.note or 'Confirmed payment claim',
+                    'tenantName': claim.bill.tenant_name,
+                    'propertyName': claim.bill.property_name,
+                },
+            )
+            claim.payment_transaction = txn
+            claim.save(update_fields=['payment_transaction', 'updated_at'])
     elif claim.member_deposit_id:
         dep = claim.member_deposit
         dep.status = DepositStatus.CONFIRMED

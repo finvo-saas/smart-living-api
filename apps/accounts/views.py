@@ -50,7 +50,12 @@ from accounts.services.pin import (
 )
 from accounts.services.session import auth_response, user_payload
 from core.envelope import api_success
-from core.exceptions import ForbiddenError, InvalidError, NotFoundError
+from core.exceptions import (
+    ForbiddenError,
+    InvalidError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from core.services.media import media_storage
 from core.throttling import OTPRateThrottle
 
@@ -225,19 +230,19 @@ class CookieTokenRefreshView(APIView):
     def post(self, request):
         raw = read_refresh_token(request)
         if not raw:
-            raise InvalidError('Session expired. Sign in again.')
+            raise UnauthorizedError('Session expired. Sign in again.')
         try:
             old = RefreshToken(raw)
             user_id = old['user_id']
         except TokenError as exc:
             # Common when two tabs/requests refresh at once (token already rotated).
-            raise InvalidError(
+            raise UnauthorizedError(
                 'Session expired or already refreshed. Sign in again if this continues.',
             ) from exc
 
         user = User.objects.filter(pk=user_id, is_active=True).first()
         if user is None:
-            raise InvalidError('Session expired. Sign in again.')
+            raise UnauthorizedError('Session expired. Sign in again.')
 
         try:
             old.blacklist()
@@ -339,6 +344,7 @@ class CurrentUserView(RetrieveUpdateAPIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        request.user.refresh_from_db()
         return Response(api_success(_user_payload(request.user, request)))
 
 

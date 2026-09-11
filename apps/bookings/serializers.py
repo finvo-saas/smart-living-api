@@ -19,6 +19,8 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_blank=True,
     )
+    flatId = serializers.UUIDField(source='flat_id', read_only=True, allow_null=True)
+    flatNumber = serializers.SerializerMethodField()
     renterId = serializers.UUIDField(source='renter_id', read_only=True)
     renterName = serializers.CharField(source='renter_name', read_only=True)
     renterPhone = serializers.CharField(source='renter_phone', read_only=True)
@@ -57,6 +59,8 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
             'propertyType',
             'propertyAddress',
             'propertyImage',
+            'flatId',
+            'flatNumber',
             'renterId',
             'renterName',
             'renterPhone',
@@ -86,6 +90,11 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
             'completedAt',
         )
         read_only_fields = fields
+
+    def get_flatNumber(self, obj) -> str | None:
+        if obj.flat_id and getattr(obj, 'flat', None):
+            return obj.flat.flat_number
+        return None
 
     def get_renterWhatsapp(self, obj) -> str:
         return getattr(obj.renter, 'whatsapp_number', '') or ''
@@ -133,3 +142,4 @@ class PropertyBookingStatusSerializer(serializers.Serializer):
         choices=['pending', 'approved', 'rejected', 'cancelled', 'completed'],
     )
     reason = serializers.CharField(required=False, allow_blank=True, default='')
+    flatId = serializers.UUIDField(required=False, allow_null=True)

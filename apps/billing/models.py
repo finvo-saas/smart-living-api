@@ -92,6 +92,9 @@ class Bill(UUIDModel, TimestampedModel):
         blank=True,
         related_name='bills',
     )
+    pdf_url = models.URLField(blank=True, default='')
+    pdf_key = models.CharField(max_length=512, blank=True, default='')
+    whatsapp_shared_at = models.DateTimeField(null=True, blank=True)
     is_deleted = models.BooleanField(default=False)
 
     class Meta:

@@ -3,9 +3,10 @@ from uuid import UUID
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.http import HttpResponseRedirect
 
 from billing.models import (
     Bill,
@@ -29,10 +30,18 @@ from billing.serializers import (
     MeterReadingSerializer,
 )
 from billing.services.generation import bulk_generate_bills, create_bill_from_payload
+from billing.services.public_pdf import (
+    resolve_bill_for_public_pdf,
+    storage_url_without_template_tag,
+)
+from billing.services.whatsapp_share import prepare_whatsapp_share
 from core.envelope import api_success
 from core.exceptions import ForbiddenError, InvalidError, NotFoundError
+from core.services.media import media_storage
 from portfolio.models import Building, Flat, Tenancy, TenancyStatus
 from portfolio.serializers import BuildingSerializer, FlatSerializer, RenterSerializer
+from mess.models import Mess
+from mess.serializers import MessSerializer
 
 
 def _owner_bill(user, bill_id) -> Bill:
@@ -101,6 +110,7 @@ class BillsBoardView(APIView):
         readings = MeterReading.objects.filter(owner=owner).select_related('flat')
         buildings = Building.objects.filter(owner=owner)
         flats = Flat.objects.filter(building__owner=owner).prefetch_related('tenancies')
+        messes = Mess.objects.filter(owner=owner, is_deleted=False).order_by('-created_at')
 
         return Response(
             api_success(
@@ -112,7 +122,7 @@ class BillsBoardView(APIView):
                     'buildings': BuildingSerializer(buildings, many=True).data,
                     'flats': FlatSerializer(flats, many=True).data,
                     'renters': _board_renters(owner),
-                    'messList': [],
+                    'messList': MessSerializer(messes, many=True).data,
                 },
             ),
         )
@@ -294,6 +304,112 @@ class MarkBillPaidView(APIView):
         return Response(api_success(_serialize_bill(bill)))
 
 
+class BillWhatsAppShareView(APIView):
+    """
+    Owner-only: generate/upload bill PDF and return a wa.me deep link.
+
+    Opens the owner's WhatsApp (logged-in device) to message the tenant.
+    Free — no Business API / credits.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        bill = _owner_bill(request.user, pk)
+        if bill.owner_id != request.user.id and request.user.role != 'admin':
+            raise ForbiddenError('Only the bill owner can share bills on WhatsApp.')
+        regenerate = bool(request.data.get('regeneratePdf')) if isinstance(request.data, dict) else False
+        payload = prepare_whatsapp_share(
+            bill, regenerate_pdf=regenerate, request=request
+        )
+        return Response(api_success(payload))
+
+
+class BillDueRemindView(APIView):
+    """
+    Owner-only due reminder for a bill.
+
+    channel=whatsapp (default): returns wa.me deep link (no PDF).
+    channel=sms: sends SMS via gateway to the tenant phone.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        from billing.services.whatsapp_share import (
+            prepare_whatsapp_due_reminder,
+            send_sms_due_reminder,
+        )
+
+        bill = _owner_bill(request.user, pk)
+        if bill.owner_id != request.user.id and request.user.role != 'admin':
+            raise ForbiddenError('Only the bill owner can send due reminders.')
+        if bill.status == BillStatus.PAID:
+            raise InvalidError('This bill is already paid.')
+
+        channel = (request.data.get('channel') or 'whatsapp').lower()
+        if channel == 'sms':
+            payload = send_sms_due_reminder(bill)
+        else:
+            payload = prepare_whatsapp_due_reminder(bill)
+        return Response(api_success(payload))
+
+
+class BillsBulkDueRemindView(APIView):
+    """Prepare WhatsApp due reminders for many unpaid owner bills (apartment-friendly)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from billing.services.whatsapp_share import prepare_whatsapp_due_reminder
+
+        if request.user.role not in ('owner', 'admin'):
+            raise ForbiddenError('Only owners can bulk-remind bills.')
+        bill_ids = request.data.get('billIds') or []
+        property_type = request.data.get('propertyType')  # optional filter
+        unpaid_only = request.data.get('unpaidOnly', True)
+
+        qs = Bill.objects.filter(owner=request.user, is_deleted=False)
+        if bill_ids:
+            qs = qs.filter(id__in=bill_ids)
+        if property_type:
+            qs = qs.filter(property_type=property_type)
+        if unpaid_only:
+            qs = qs.exclude(status=BillStatus.PAID)
+
+        results = []
+        errors = []
+        for bill in qs.select_related('tenant')[:100]:
+            try:
+                results.append(prepare_whatsapp_due_reminder(bill))
+            except Exception as exc:  # noqa: BLE001
+                errors.append({'billId': str(bill.id), 'error': str(exc)})
+        return Response(api_success({'reminders': results, 'errors': errors}))
+
+
+class PublicBillPdfView(APIView):
+    """
+    Unauthenticated branded PDF link → redirect to DigitalOcean Spaces.
+
+    Example:
+    ``/api/v1/public/bills/green-valley-mess/4caa1b87….pdf``
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request, property_slug, file_id):
+        bill = resolve_bill_for_public_pdf(property_slug, file_id)
+        if not bill or not bill.pdf_key:
+            raise NotFoundError('Bill PDF not found.')
+        target = storage_url_without_template_tag(bill.pdf_url)
+        if not target.startswith('http'):
+            target = media_storage.url_for(bill.pdf_key, request=request)
+        if not target:
+            raise NotFoundError('Bill PDF not available.')
+        return HttpResponseRedirect(target)
+
+
 class BillTemplatesBulkView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -315,6 +431,12 @@ class BillTemplatesBulkView(APIView):
         for entry in payload:
             tid = entry.get('id')
             items = entry.get('items', [])
+            # Ignore client-generated non-UUID ids (e.g. template173…) so we create fresh rows.
+            if tid:
+                try:
+                    UUID(str(tid))
+                except (ValueError, TypeError):
+                    tid = None
             if tid and str(tid) in existing:
                 tmpl = existing[str(tid)]
                 seen.add(str(tid))
@@ -322,24 +444,27 @@ class BillTemplatesBulkView(APIView):
                 tmpl.description = entry.get('description', tmpl.description)
                 tmpl.property_id = entry.get('propertyId', tmpl.property_id)
                 tmpl.property_type = entry.get('propertyType', tmpl.property_type)
-                tmpl.flat_id = entry.get('flatId')
-                tmpl.seat_id = entry.get('seatId', '')
+                flat_raw = entry.get('flatId', tmpl.flat_id)
+                tmpl.flat_id = flat_raw or None
+                tmpl.seat_id = entry.get('seatId') or ''
                 tmpl.is_active = entry.get('isActive', tmpl.is_active)
                 tmpl.save()
                 tmpl.items.all().delete()
             else:
+                flat_raw = entry.get('flatId')
                 tmpl = BillTemplate.objects.create(
                     owner=request.user,
                     name=entry.get('name', 'Template'),
                     description=entry.get('description', ''),
                     property_id=entry.get('propertyId'),
                     property_type=entry.get('propertyType', 'apartment'),
-                    flat_id=entry.get('flatId'),
-                    seat_id=entry.get('seatId', ''),
+                    flat_id=flat_raw or None,
+                    seat_id=entry.get('seatId') or '',
                     is_active=entry.get('isActive', True),
                 )
 
             for item in items:
+                meter = item.get('meterType') or ''
                 BillTemplateItem.objects.create(
                     template=tmpl,
                     description=item['description'],
@@ -348,8 +473,8 @@ class BillTemplatesBulkView(APIView):
                     fixed_amount=item.get('fixedAmount'),
                     unit_rate=item.get('unitRate'),
                     percentage=item.get('percentage'),
-                    base_item_id=item.get('baseItemId', ''),
-                    meter_type=item.get('meterType', ''),
+                    base_item_id=item.get('baseItemId') or '',
+                    meter_type=meter,
                     service_charge=item.get('serviceCharge'),
                 )
             saved.append(tmpl)
@@ -413,17 +538,26 @@ class BillRulesBulkView(APIView):
 
         for entry in payload:
             rid = entry.get('id')
+            # Ignore client-generated non-UUID ids so we create fresh rows.
+            if rid:
+                try:
+                    UUID(str(rid))
+                except (TypeError, ValueError):
+                    rid = None
             template_id = entry.get('templateId')
             if not template_id:
                 raise InvalidError('templateId is required for each rule.')
+
+            property_id = entry.get('propertyId') or None
+            property_type = entry.get('propertyType') or ''
 
             if rid and str(rid) in existing:
                 rule = existing[str(rid)]
                 seen.add(str(rid))
                 rule.name = entry.get('name', rule.name)
-                rule.description = entry.get('description', rule.description)
-                rule.property_id = entry.get('propertyId')
-                rule.property_type = entry.get('propertyType', '')
+                rule.description = entry.get('description') or ''
+                rule.property_id = property_id
+                rule.property_type = property_type
                 rule.template_id = template_id
                 rule.schedule = entry.get('schedule', rule.schedule)
                 rule.is_active = entry.get('isActive', rule.is_active)
@@ -436,11 +570,11 @@ class BillRulesBulkView(APIView):
                 rule = BillGenerationRule.objects.create(
                     owner=request.user,
                     name=entry.get('name', 'Rule'),
-                    description=entry.get('description', ''),
-                    property_id=entry.get('propertyId'),
-                    property_type=entry.get('propertyType', ''),
+                    description=entry.get('description') or '',
+                    property_id=property_id,
+                    property_type=property_type,
                     template_id=template_id,
-                    schedule=entry.get('schedule', {}),
+                    schedule=entry.get('schedule') or {},
                     is_active=entry.get('isActive', True),
                     last_run=entry.get('lastRun'),
                     next_run=entry.get('nextRun'),
@@ -482,14 +616,22 @@ class MeterReadingsBulkView(APIView):
 
         for entry in payload:
             rid = entry.get('id')
-            flat_id = entry.get('flatId')
+            # Ignore client-generated non-UUID ids so we create fresh rows.
+            if rid:
+                try:
+                    UUID(str(rid))
+                except (TypeError, ValueError):
+                    rid = None
+            flat_raw = entry.get('flatId')
+            flat_id = flat_raw or None
+            seat_id = entry.get('seatId') or ''
             if rid and str(rid) in existing:
                 reading = existing[str(rid)]
                 seen.add(str(rid))
                 reading.property_id = entry.get('propertyId', reading.property_id)
                 reading.property_type = entry.get('propertyType', reading.property_type)
                 reading.flat_id = flat_id
-                reading.seat_id = entry.get('seatId', '')
+                reading.seat_id = seat_id
                 reading.month = entry.get('month', reading.month)
                 reading.year = entry.get('year', reading.year)
                 reading.electricity = entry.get('electricity')
@@ -508,7 +650,7 @@ class MeterReadingsBulkView(APIView):
                     property_id=entry['propertyId'],
                     property_type=entry.get('propertyType', 'apartment'),
                     flat_id=flat_id,
-                    seat_id=entry.get('seatId', ''),
+                    seat_id=seat_id,
                     month=entry['month'],
                     year=entry['year'],
                     electricity=entry.get('electricity'),
@@ -534,44 +676,35 @@ class MeterReadingsBulkView(APIView):
 
 def _meter_lookup(owner, params, *, previous: bool):
     property_id = params.get('property_id')
-    flat_id = params.get('flat_id')
+    flat_id = params.get('flat_id') or None
     month = params.get('month')
     year = params.get('year')
     if not all([property_id, month, year]):
         raise InvalidError('property_id, month, and year are required.')
 
-    qs = MeterReading.objects.filter(
-        owner=owner,
-        property_id=property_id,
-        month=month,
-        year=int(year),
-    )
-    if flat_id:
-        qs = qs.filter(flat_id=flat_id)
+    from billing.services.generation import _month_name_to_number, MONTH_NAMES
 
-    reading = qs.order_by('-submitted_at').first()
-    if not reading:
-        return None
-
+    target_month = month
+    target_year = int(year)
     if previous:
-        from billing.services.generation import _month_name_to_number, MONTH_NAMES
-
         month_num = _month_name_to_number(month)
         if not month_num:
             return None
-        prev_month = month_num - 1 if month_num > 1 else 12
-        prev_year = int(year) if month_num > 1 else int(year) - 1
-        prev_name = MONTH_NAMES[prev_month]
-        prev = MeterReading.objects.filter(
-            owner=owner,
-            property_id=property_id,
-            flat_id=flat_id,
-            month=prev_name,
-            year=prev_year,
-        ).order_by('-submitted_at').first()
-        return prev
+        target_month = MONTH_NAMES[month_num - 1 if month_num > 1 else 12]
+        target_year = int(year) if month_num > 1 else int(year) - 1
 
-    return reading
+    qs = MeterReading.objects.filter(
+        owner=owner,
+        property_id=property_id,
+        month=target_month,
+        year=target_year,
+    )
+    if flat_id:
+        qs = qs.filter(flat_id=flat_id)
+    else:
+        qs = qs.filter(flat__isnull=True)
+
+    return qs.order_by('-submitted_at').first()
 
 
 class PreviousMeterReadingView(APIView):

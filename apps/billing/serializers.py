@@ -162,6 +162,7 @@ class BillSerializer(serializers.ModelSerializer):
     createdAt = serializers.SerializerMethodField()
     templateId = serializers.SerializerMethodField()
     meterReadings = serializers.SerializerMethodField()
+    whatsappSharedAt = serializers.SerializerMethodField()
 
     class Meta:
         model = Bill
@@ -185,6 +186,7 @@ class BillSerializer(serializers.ModelSerializer):
             'createdAt',
             'templateId',
             'meterReadings',
+            'whatsappSharedAt',
         )
 
     def get_tenantId(self, obj):
@@ -210,6 +212,11 @@ class BillSerializer(serializers.ModelSerializer):
         if obj.meter_reading_id:
             return MeterReadingSerializer(obj.meter_reading).data
         return None
+
+    def get_whatsappSharedAt(self, obj):
+        if not obj.whatsapp_shared_at:
+            return None
+        return obj.whatsapp_shared_at.isoformat()
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

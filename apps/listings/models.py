@@ -38,6 +38,13 @@ class FurnishingStatus(models.TextChoices):
     SEMI = 'semi-furnished', 'Semi-furnished'
 
 
+class TenantType(models.TextChoices):
+    FAMILY = 'family', 'Family'
+    BACHELOR = 'bachelor', 'Bachelor'
+    OFFICE = 'office', 'Office'
+    ANY = 'any', 'Any'
+
+
 class VerificationStatus(models.TextChoices):
     VERIFIED = 'verified', 'Verified'
     PENDING = 'pending', 'Pending'
@@ -104,6 +111,24 @@ class Property(UUIDModel, TimestampedModel):
         choices=FurnishingStatus.choices,
         null=True,
         blank=True,
+    )
+    bedrooms = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text='BHK / bedroom count for apartment listings.',
+    )
+    bathrooms = models.PositiveSmallIntegerField(null=True, blank=True)
+    size_sqft = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text='Built-up size in square feet (not neighbourhood area).',
+    )
+    tenant_type = models.CharField(
+        max_length=20,
+        choices=TenantType.choices,
+        null=True,
+        blank=True,
+        help_text='Preferred occupancy: family, bachelor, office, or any.',
     )
     parking = models.BooleanField(null=True, blank=True)
     security = models.BooleanField(null=True, blank=True)

@@ -12,6 +12,10 @@ from accounts.models import Role, User, UserProfile
 from accounts.phone import normalize_bd_phone
 from core.exceptions import ConflictError, InvalidError, NotFoundError
 from mess.models import Mess, MessStudent, Seat, SeatStatus
+from mess.services.identity import (
+    apply_member_photo,
+    sync_linked_user_identity,
+)
 
 
 def _get_or_create_renter(phone: str, name: str, email: str = '') -> User:
@@ -107,11 +111,13 @@ def assign_student(mess: Mess, data: dict, *, link_user: User | None = None) -> 
     profile = {
         field: data[key] or ''
         for key, field in PROFILE_FIELDS.items()
-        if data.get(key) is not None
+        if data.get(key) is not None and key != 'photoUrl'
     }
     # Fall back to the linked account's WhatsApp number when left empty.
     if not profile.get('whatsapp_number') and user is not None:
         profile['whatsapp_number'] = user.whatsapp_number
+
+    photo_url = data.get('photoUrl')
 
     with transaction.atomic():
         student = MessStudent.objects.create(
@@ -130,6 +136,16 @@ def assign_student(mess: Mess, data: dict, *, link_user: User | None = None) -> 
             student.seat = _claim_seat(mess, seat_number, student)
             student.save(update_fields=['seat', 'updated_at'])
 
+        if photo_url is not None:
+            apply_member_photo(student, photo_url)
+        if user is not None:
+            sync_linked_user_identity(
+                student,
+                name=name,
+                email=profile.get('email'),
+                whatsapp=profile.get('whatsapp_number'),
+            )
+
         mess.refresh_seat_counts()
 
     return student
@@ -139,9 +155,12 @@ def update_student(student: MessStudent, data: dict) -> MessStudent:
     """Owner edit of one member: profile, seat move, and move-out lifecycle."""
     mess = student.mess
     updates: set[str] = set()
+    photo_url = data.get('photoUrl') if 'photoUrl' in data else None
 
     with transaction.atomic():
-        student = MessStudent.objects.select_for_update().get(pk=student.pk)
+        student = MessStudent.objects.select_for_update().select_related('user').get(
+            pk=student.pk,
+        )
 
         if data.get('name'):
             student.name = data['name'].strip()
@@ -149,7 +168,17 @@ def update_student(student: MessStudent, data: dict) -> MessStudent:
         if data.get('phone'):
             student.phone = normalize_bd_phone(data['phone'])
             updates.add('phone')
+            # Re-link if phone now matches an account.
+            try:
+                matched = User.objects.get(phone=student.phone)
+            except User.DoesNotExist:
+                matched = None
+            if matched and student.user_id != matched.id:
+                student.user = matched
+                updates.add('user')
         for key, field in PROFILE_FIELDS.items():
+            if key == 'photoUrl':
+                continue
             if key in data and data[key] is not None:
                 setattr(student, field, data[key] or '')
                 updates.add(field)
@@ -187,7 +216,24 @@ def update_student(student: MessStudent, data: dict) -> MessStudent:
                 student.seat_number = seat_number
             updates.update({'seat', 'seat_number'})
 
-        student.save(update_fields=[*updates, 'updated_at'])
+        if updates:
+            student.save(update_fields=[*updates, 'updated_at'])
+
+        if photo_url is not None:
+            apply_member_photo(student, photo_url)
+
+        if student.user_id:
+            sync_linked_user_identity(
+                student,
+                name=student.name if 'name' in updates else None,
+                email=student.email if 'email' in updates else None,
+                whatsapp=(
+                    student.whatsapp_number
+                    if 'whatsapp_number' in updates
+                    else None
+                ),
+            )
+
         mess.refresh_seat_counts()
 
     return student

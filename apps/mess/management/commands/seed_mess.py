@@ -443,14 +443,19 @@ class Command(BaseCommand):
 
         student_objs: list[MessStudent] = []
         for stu in spec['students']:
-            user = User.objects.filter(phone=stu['phone']).first()
+            from accounts.phone import normalize_bd_phone
+
+            phone = normalize_bd_phone(stu['phone'])
+            user = User.objects.filter(phone=phone).first()
             student, _ = MessStudent.objects.update_or_create(
                 mess=mess,
-                phone=stu['phone'],
+                phone=phone,
                 defaults={
                     'user': user,
                     'name': stu['name'],
-                    'whatsapp_number': stu.get('whatsapp_number') or stu['phone'],
+                    'whatsapp_number': normalize_bd_phone(
+                        stu.get('whatsapp_number') or stu['phone'],
+                    ),
                     'email': stu.get('email') or '',
                     'occupant_type': stu.get('occupant_type') or OccupantType.STUDENT,
                     'student_id_code': stu.get('student_id_code') or '',

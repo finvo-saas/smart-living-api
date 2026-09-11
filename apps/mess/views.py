@@ -80,6 +80,10 @@ from mess.services.expenses import (
     parse_month,
 )
 from mess.services.hisab import preview_month, serialize_deposit
+from mess.services.membership import (
+    link_user_to_mess_memberships,
+    membership_phone_q,
+)
 from mess.services.seats import assign_student, remove_student, update_student
 from mess.services.sms import send_bulk_sms
 from mess.services.sms_credits import (
@@ -113,13 +117,26 @@ def _is_mess_owner(mess, user):
     return bool(user_phone and mess_phone and user_phone == mess_phone)
 
 
+def _user_mess_membership_q(user):
+    """Match enrollments by linked account or same phone (any BD format)."""
+    q = Q(user=user)
+    if getattr(user, 'phone', None):
+        q |= membership_phone_q(user.phone)
+    return q
+
+
+def _link_memberships_to_user(user) -> None:
+    link_user_to_mess_memberships(user)
+
+
 def _is_mess_student(mess, user):
+    if not getattr(user, 'is_authenticated', False):
+        return False
     return MessStudent.objects.filter(
         mess=mess,
-        user=user,
         is_active=True,
         is_deleted=False,
-    ).exists()
+    ).filter(_user_mess_membership_q(user)).exists()
 
 
 def _assert_mess_owner(mess, user):
@@ -149,12 +166,12 @@ def _serialize_messes(qs):
     return MessSerializer(qs, many=True).data
 
 
-def _serialize_student(student):
-    return StudentSerializer(student).data
+def _serialize_student(student, request=None):
+    return StudentSerializer(student, context={'request': request}).data
 
 
-def _serialize_students(qs):
-    return StudentSerializer(qs, many=True).data
+def _serialize_students(qs, request=None):
+    return StudentSerializer(qs, many=True, context={'request': request}).data
 
 
 def _serialize_seat(seat):
@@ -229,6 +246,22 @@ class MessDetailView(APIView):
         return Response(api_success(_serialize_mess(mess)))
 
 
+class MessMyMembershipsView(APIView):
+    """Signed-in renter: list their own mess memberships (no full roster)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _link_memberships_to_user(request.user)
+        qs = (
+            MessStudent.objects.filter(is_deleted=False, is_active=True)
+            .filter(_user_mess_membership_q(request.user))
+            .select_related('mess', 'seat', 'user')
+            .order_by('-joined_date')
+        )
+        return Response(api_success(_serialize_students(qs, request)))
+
+
 class MessStudentsView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -240,11 +273,15 @@ class MessStudentsView(APIView):
         qs = MessStudent.objects.filter(mess=mess, is_deleted=False).select_related(
             'mess',
             'seat',
+            'user',
         )
         if not can_manage:
             # Boarders only ever see their own record, never the roster.
-            qs = qs.filter(user=request.user)
-            return Response(api_success(_serialize_students(qs.order_by('-joined_date'))))
+            _link_memberships_to_user(request.user)
+            qs = qs.filter(_user_mess_membership_q(request.user))
+            return Response(
+                api_success(_serialize_students(qs.order_by('-joined_date'), request)),
+            )
 
         search = (request.query_params.get('q') or '').strip()
         if search:
@@ -263,7 +300,7 @@ class MessStudentsView(APIView):
             qs = qs.filter(is_active=True)
         elif member_status in ('inactive', 'left'):
             qs = qs.filter(is_active=False)
-        return Response(api_success(_serialize_students(qs.order_by('-joined_date'))))
+        return Response(api_success(_serialize_students(qs.order_by('-joined_date'), request)))
 
     def post(self, request, pk):
         mess = _get_mess(pk)
@@ -271,8 +308,9 @@ class MessStudentsView(APIView):
         serializer = StudentAssignSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         student = assign_student(mess, serializer.validated_data)
+        student = MessStudent.objects.select_related('mess', 'seat', 'user').get(pk=student.pk)
         return Response(
-            api_success(_serialize_student(student)),
+            api_success(_serialize_student(student, request)),
             status=status.HTTP_201_CREATED,
         )
 
@@ -284,7 +322,7 @@ class MessStudentDetailView(APIView):
 
     def _get_student(self, mess, student_id):
         try:
-            return MessStudent.objects.select_related('mess', 'seat').get(
+            return MessStudent.objects.select_related('mess', 'seat', 'user').get(
                 pk=student_id,
                 mess=mess,
                 is_deleted=False,
@@ -323,7 +361,7 @@ class MessStudentDetailView(APIView):
         return Response(
             api_success(
                 {
-                    'member': _serialize_student(student),
+                    'member': _serialize_student(student, request),
                     'attendance': build_attendance_summary(
                         mess,
                         student,
@@ -351,7 +389,8 @@ class MessStudentDetailView(APIView):
         if not serializer.validated_data:
             raise InvalidError('Nothing to update.')
         student = update_student(student, serializer.validated_data)
-        return Response(api_success(_serialize_student(student)))
+        student = MessStudent.objects.select_related('mess', 'seat', 'user').get(pk=student.pk)
+        return Response(api_success(_serialize_student(student, request)))
 
     def delete(self, request, pk, student_id):
         mess = _get_mess(pk)
@@ -505,14 +544,18 @@ class NoticeAcknowledgeView(APIView):
     def post(self, request, notice_id):
         notice = _get_notice(notice_id)
         _assert_mess_read(notice.mess, request.user)
-        ack, _ = MessNoticeAck.objects.get_or_create(
+        ack, created = MessNoticeAck.objects.get_or_create(
             notice=notice,
             user=request.user,
             defaults={'acknowledged_at': timezone.now()},
         )
-        if not _:
+        if not created:
             ack.acknowledged_at = timezone.now()
             ack.save(update_fields=['acknowledged_at', 'updated_at'])
+        # Drop stale prefetch so the new ack is included in the response.
+        cache = getattr(notice, '_prefetched_objects_cache', None)
+        if cache is not None:
+            cache.pop('acknowledgments', None)
         return Response(api_success(NoticeSerializer(notice).data))
 
 
@@ -1186,12 +1229,16 @@ class RuleAcceptView(APIView):
 
     def post(self, request, pk, rule_id):
         mess = _get_mess(pk)
-        enrollment = MessStudent.objects.filter(
-            mess=mess,
-            user=request.user,
-            is_active=True,
-            is_deleted=False,
-        ).first()
+        _link_memberships_to_user(request.user)
+        enrollment = (
+            MessStudent.objects.filter(
+                mess=mess,
+                is_active=True,
+                is_deleted=False,
+            )
+            .filter(_user_mess_membership_q(request.user))
+            .first()
+        )
         if not enrollment:
             raise ForbiddenError('Only enrolled students can accept rules.')
         try:

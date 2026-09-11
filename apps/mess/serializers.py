@@ -154,9 +154,11 @@ class StudentSerializer(serializers.ModelSerializer):
     messId = serializers.UUIDField(source='mess_id', read_only=True)
     messName = serializers.CharField(source='mess.name', read_only=True)
     userId = serializers.SerializerMethodField()
-    whatsappNumber = serializers.CharField(source='whatsapp_number', read_only=True)
+    name = serializers.SerializerMethodField()
+    whatsappNumber = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
     occupantType = serializers.CharField(source='occupant_type', read_only=True)
-    photoUrl = serializers.CharField(source='photo_url', read_only=True)
+    photoUrl = serializers.SerializerMethodField()
     studentId = serializers.CharField(source='student_id_code', allow_blank=True, required=False)
     emergencyContactName = serializers.CharField(
         source='emergency_contact_name',
@@ -174,6 +176,7 @@ class StudentSerializer(serializers.ModelSerializer):
     leftDate = serializers.DateField(source='left_date', allow_null=True, read_only=True)
     monthlyFee = serializers.FloatField(source='monthly_fee')
     isActive = serializers.BooleanField(source='is_active', read_only=True)
+    isSystemUser = serializers.SerializerMethodField()
 
     class Meta:
         model = MessStudent
@@ -182,6 +185,7 @@ class StudentSerializer(serializers.ModelSerializer):
             'messId',
             'messName',
             'userId',
+            'isSystemUser',
             'name',
             'phone',
             'whatsappNumber',
@@ -207,6 +211,31 @@ class StudentSerializer(serializers.ModelSerializer):
 
     def get_userId(self, obj) -> str:
         return str(obj.user_id) if obj.user_id else ''
+
+    def get_isSystemUser(self, obj) -> bool:
+        return bool(obj.user_id)
+
+    def get_name(self, obj) -> str:
+        from mess.services.identity import member_display_name
+
+        return member_display_name(obj)
+
+    def get_whatsappNumber(self, obj) -> str:
+        user = getattr(obj, 'user', None)
+        if user is not None and (user.whatsapp_number or '').strip():
+            return user.whatsapp_number.strip()
+        return (obj.whatsapp_number or '').strip()
+
+    def get_email(self, obj) -> str:
+        user = getattr(obj, 'user', None)
+        if user is not None and (user.email or '').strip():
+            return user.email.strip()
+        return (obj.email or '').strip()
+
+    def get_photoUrl(self, obj) -> str:
+        from mess.services.identity import member_photo_url
+
+        return member_photo_url(obj, request=self.context.get('request'))
 
     def get_roomNumber(self, obj) -> str:
         return obj.seat.room_number if obj.seat_id else ''
@@ -735,6 +764,19 @@ class MessRuleWriteSerializer(serializers.Serializer):
     requiresAcceptance = serializers.BooleanField(required=False, default=False)
     effectiveDate = serializers.DateField(required=False, allow_null=True)
     expiryDate = serializers.DateField(required=False, allow_null=True)
+
+    def to_internal_value(self, data):
+        # HTML date inputs send "" when cleared — treat as null.
+        if isinstance(data, dict):
+            data = {
+                **data,
+                **{
+                    key: None
+                    for key in ('effectiveDate', 'expiryDate')
+                    if data.get(key) == ''
+                },
+            }
+        return super().to_internal_value(data)
 
 
 class RuleAcceptanceSerializer(serializers.ModelSerializer):

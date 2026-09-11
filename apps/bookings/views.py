@@ -43,7 +43,7 @@ class MyPropertyBookingsView(APIView):
     def get(self, request):
         qs = (
             PropertyBooking.objects.filter(renter=request.user, is_deleted=False)
-            .select_related('renter', 'owner')
+            .select_related('renter', 'owner', 'flat')
             .order_by('-created_at')
         )
         return Response(api_success(_serialize_many(qs, request)))
@@ -55,7 +55,7 @@ class OwnerPropertyBookingsView(APIView):
     def get(self, request):
         qs = (
             PropertyBooking.objects.filter(owner=request.user, is_deleted=False)
-            .select_related('renter', 'owner')
+            .select_related('renter', 'owner', 'flat')
             .order_by('-created_at')
         )
         return Response(api_success(_serialize_many(qs, request)))
@@ -91,6 +91,7 @@ class PropertyBookingStatusView(APIView):
             pk,
             data['status'],
             data.get('reason'),
+            data.get('flatId'),
         )
         return Response(api_success(_serialize(booking, request)))
 

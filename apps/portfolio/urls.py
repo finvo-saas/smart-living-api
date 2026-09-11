@@ -8,13 +8,21 @@ from portfolio.views import (
     BuildingListCreateView,
     FlatAssignRenterView,
     FlatDetailView,
+    FlatEnsureListingView,
     FlatListCreateView,
     FlatVacateView,
     FloorDetailView,
     FloorStatsView,
+    MyTenanciesView,
     PortfolioSnapshotView,
     RenterHistoryView,
     RenterListView,
+)
+from portfolio.views_notices import (
+    BuildingNoticeAckView,
+    BuildingNoticeDetailView,
+    BuildingNoticeFeedView,
+    BuildingNoticeListCreateView,
 )
 
 urlpatterns = [
@@ -31,6 +39,22 @@ urlpatterns = [
         BuildingFlatListView.as_view(),
         name='building-flats',
     ),
+    path(
+        'buildings/<uuid:building_id>/notices/',
+        BuildingNoticeListCreateView.as_view(),
+        name='building-notices',
+    ),
+    path('building-notices/', BuildingNoticeFeedView.as_view(), name='building-notice-feed'),
+    path(
+        'building-notices/<uuid:notice_id>/',
+        BuildingNoticeDetailView.as_view(),
+        name='building-notice-detail',
+    ),
+    path(
+        'building-notices/<uuid:notice_id>/acknowledge/',
+        BuildingNoticeAckView.as_view(),
+        name='building-notice-ack',
+    ),
     path('floors/<uuid:pk>/', FloorDetailView.as_view(), name='floor-detail'),
     path('floors/<uuid:pk>/stats/', FloorStatsView.as_view(), name='floor-stats'),
     path('flats/', FlatListCreateView.as_view(), name='flat-list'),
@@ -40,7 +64,13 @@ urlpatterns = [
         FlatAssignRenterView.as_view(),
         name='flat-assign-renter',
     ),
+    path(
+        'flats/<uuid:pk>/ensure-listing/',
+        FlatEnsureListingView.as_view(),
+        name='flat-ensure-listing',
+    ),
     path('flats/<uuid:pk>/vacate/', FlatVacateView.as_view(), name='flat-vacate'),
+    path('tenancies/mine/', MyTenanciesView.as_view(), name='tenancies-mine'),
     path('renters/', RenterListView.as_view(), name='renter-list'),
     path(
         'renters/<uuid:pk>/history/',

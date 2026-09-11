@@ -219,6 +219,8 @@ def generate_bill_for_flat(
     template: BillTemplate | None = None,
     meter_reading: MeterReading | None = None,
     include_unpaid: bool = False,
+    due_day: int = 5,
+    occupied_only: bool = False,
 ) -> Bill | None:
     if Bill.objects.filter(
         owner=owner,
@@ -232,6 +234,9 @@ def generate_bill_for_flat(
             return None
 
     tenancy = _active_tenancy(flat)
+    if occupied_only and not tenancy:
+        return None
+
     tenant = tenancy.tenant if tenancy else None
     tenant_name = (
         (tenancy.tenant_name or tenant.name or tenant.phone)
@@ -274,7 +279,7 @@ def generate_bill_for_flat(
             },
         )
 
-    due = default_due_date(year, month)
+    due = default_due_date(year, month, day=due_day)
     bill = Bill.objects.create(
         owner=owner,
         tenant=tenant,
@@ -285,6 +290,107 @@ def generate_bill_for_flat(
         property_id=building.id,
         flat=flat,
         flat_number=flat.flat_number,
+        month=month,
+        year=year,
+        amount=total,
+        due_date=due,
+        status=BillStatus.UNPAID,
+        template=template,
+        meter_reading=meter_reading,
+    )
+
+    for item in line_items:
+        BillItem.objects.create(
+            bill=bill,
+            description=item['description'],
+            amount=item['amount'],
+            type=item['type'],
+            calculation_type=item.get('calculation_type', ''),
+            unit_rate=item.get('unit_rate'),
+            previous_reading=item.get('previous_reading'),
+            current_reading=item.get('current_reading'),
+            consumption=item.get('consumption'),
+        )
+
+    return bill
+
+
+@transaction.atomic
+def generate_bill_for_mess_member(
+    owner,
+    *,
+    mess,
+    student,
+    month: str,
+    year: int,
+    template: BillTemplate | None = None,
+    meter_reading: MeterReading | None = None,
+    due_day: int = 5,
+) -> Bill | None:
+    """Create one mess seat/member bill for a month if it does not already exist."""
+    existing = Bill.objects.filter(
+        owner=owner,
+        property_type=PropertyKind.MESS,
+        property_id=mess.id,
+        month=month,
+        year=year,
+        is_deleted=False,
+    )
+    if student.user_id:
+        existing = existing.filter(tenant_id=student.user_id)
+    else:
+        existing = existing.filter(
+            tenant_name=student.name,
+            seat_number=student.seat_number or '',
+        )
+    if existing.exists():
+        return None
+
+    base_rent = student.monthly_fee or mess.monthly_fee or Decimal('0')
+    item_amounts: dict[str, Decimal] = {}
+    line_items: list[dict] = []
+    total = Decimal('0')
+
+    if template:
+        for tmpl_item in template.items.all():
+            amount, extras = _calculate_template_item_amount(
+                tmpl_item,
+                flat_rent=base_rent,
+                meter_reading=meter_reading,
+                item_amounts=item_amounts,
+            )
+            item_amounts[str(tmpl_item.id)] = amount
+            total += amount
+            line_items.append(
+                {
+                    'description': tmpl_item.description,
+                    'amount': amount,
+                    'type': tmpl_item.type,
+                    'calculation_type': tmpl_item.calculation_type,
+                    **extras,
+                },
+            )
+    else:
+        total = base_rent
+        line_items.append(
+            {
+                'description': 'Monthly mess fee',
+                'amount': base_rent,
+                'type': BillItemType.RENT,
+                'calculation_type': CalculationType.FIXED,
+            },
+        )
+
+    due = default_due_date(year, month, day=due_day)
+    bill = Bill.objects.create(
+        owner=owner,
+        tenant=student.user if student.user_id else None,
+        tenant_name=student.name,
+        tenant_id_snapshot=str(student.id),
+        property_type=PropertyKind.MESS,
+        property_name=mess.name,
+        property_id=mess.id,
+        seat_number=student.seat_number or '',
         month=month,
         year=year,
         amount=total,

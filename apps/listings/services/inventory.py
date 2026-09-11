@@ -96,6 +96,104 @@ def sync_flat_listing(flat) -> Property | None:
     return listing
 
 
+def attach_listing_to_flat(flat, property_id) -> None:
+    """Owner linked a public listing when creating/updating a flat."""
+    if not property_id:
+        if flat.listing_id:
+            flat.listing = None
+            flat.save(update_fields=['listing', 'updated_at'])
+        return
+    listing = Property.objects.filter(pk=property_id, owner_id=flat.building.owner_id).first()
+    if listing is None:
+        return
+    if listing.type != PropertyType.APARTMENT:
+        return
+    flat.listing = listing
+    flat.save(update_fields=['listing', 'updated_at'])
+    sync_flat_listing(flat)
+
+
+def ensure_listing_for_flat(flat, *, publish: bool = True) -> Property:
+    """Create or publish a public apartment listing for a portfolio flat."""
+    from listings.models import ListingStatus
+
+    building = flat.building
+    listing = flat.listing
+    if listing is None:
+        listing = (
+            Property.objects.filter(
+                owner_id=building.owner_id,
+                type=PropertyType.APARTMENT,
+                name__iexact=f'{building.name} Flat {flat.flat_number}'.strip(),
+            )
+            .order_by('-published', '-created_at')
+            .first()
+        )
+
+    if listing is not None:
+        updates = []
+        if flat.bedrooms is not None and listing.bedrooms != flat.bedrooms:
+            listing.bedrooms = flat.bedrooms
+            updates.append('bedrooms')
+        if flat.bathrooms is not None and listing.bathrooms != flat.bathrooms:
+            listing.bathrooms = flat.bathrooms
+            updates.append('bathrooms')
+        if flat.area is not None and listing.size_sqft != flat.area:
+            listing.size_sqft = flat.area
+            updates.append('size_sqft')
+        if flat.floor_number is not None and listing.floor_level != flat.floor_number:
+            listing.floor_level = flat.floor_number
+            updates.append('floor_level')
+        if listing.rent != flat.rent:
+            listing.rent = flat.rent
+            updates.append('rent')
+        if publish and (
+            not listing.published or listing.listing_status != ListingStatus.PUBLISHED
+        ):
+            listing.published = True
+            listing.listing_status = ListingStatus.PUBLISHED
+            updates.extend(['published', 'listing_status'])
+        if updates:
+            listing.save(update_fields=list(dict.fromkeys(updates + ['updated_at'])))
+        if flat.listing_id != listing.id:
+            flat.listing = listing
+            flat.save(update_fields=['listing', 'updated_at'])
+        sync_flat_listing(flat)
+        return listing
+
+    from portfolio.models import FlatStatus
+
+    listing = Property.objects.create(
+        owner=building.owner,
+        name=f'{building.name} Flat {flat.flat_number}',
+        type=PropertyType.APARTMENT,
+        rent=flat.rent,
+        area=building.city,
+        address=building.address,
+        city=building.city,
+        available=flat.status == FlatStatus.AVAILABLE,
+        bedrooms=flat.bedrooms,
+        bathrooms=flat.bathrooms,
+        size_sqft=flat.area,
+        floor_level=flat.floor_number,
+        tenant_type='any',
+        deposit_months=2,
+        description=(
+            f'{building.name} Flat {flat.flat_number} — '
+            f'{flat.bedrooms or "?"} bed, {flat.bathrooms or "?"} bath'
+            f'{f", {flat.area} sqft" if flat.area else ""}. '
+            f'Managed unit with live occupancy.'
+        ),
+        published=publish,
+        listing_status=ListingStatus.PUBLISHED if publish else ListingStatus.DRAFT,
+        last_confirmed_at=timezone.now(),
+    )
+    flat.listing = listing
+    flat.save(update_fields=['listing', 'updated_at'])
+    sync_flat_listing(flat)
+    return listing
+
+
 def _find_matching_listing(mess) -> Property | None:
     return (
         Property.objects.filter(

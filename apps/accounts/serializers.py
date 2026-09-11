@@ -177,25 +177,21 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         if verticals is not None:
             if len(verticals) == 0:
                 raise serializers.ValidationError(
-                    {'ownerEnabledVerticals': 'Select at least one business type.'}
+                    {'ownerEnabledVerticals': 'Select your business type.'}
                 )
-            if primary and primary not in verticals:
-                attrs['owner_primary_focus'] = verticals[0]
-            elif not primary:
-                attrs['owner_primary_focus'] = verticals[0]
+            # Product rule: exactly one business type at a time.
+            if primary and primary in verticals:
+                chosen = primary
+            else:
+                chosen = verticals[0]
+            attrs['owner_enabled_verticals'] = [chosen]
+            attrs['owner_primary_focus'] = chosen
             attrs['owner_focus_selected'] = True
         elif primary:
-            current = (
-                self.instance.owner_verticals_list()
-                if self.instance is not None
-                else []
-            )
-            if current and primary not in current:
-                raise serializers.ValidationError(
-                    {
-                        'ownerPrimaryFocus': 'Primary focus must be one of your enabled business types.'
-                    }
-                )
+            # Switching primary alone also collapses to that single vertical.
+            attrs['owner_enabled_verticals'] = [primary]
+            attrs['owner_primary_focus'] = primary
+            attrs['owner_focus_selected'] = True
         return attrs
 
     def update(self, instance, validated_data):
@@ -449,6 +445,29 @@ class RenterProfileSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         if data.get('jobInfo') == {}:
             data['jobInfo'] = None
+        docs = data.get('documents') or []
+        if isinstance(docs, list):
+            from core.services.media import media_storage
+
+            request = self.context.get('request')
+            refreshed = []
+            for doc in docs:
+                if not isinstance(doc, dict):
+                    refreshed.append(doc)
+                    continue
+                item = dict(doc)
+                key = (item.get('fileKey') or item.get('key') or '').strip()
+                if key:
+                    try:
+                        item['fileUrl'] = media_storage.signed_url(
+                            key,
+                            request=request,
+                        )
+                        item['fileKey'] = key
+                    except Exception:  # noqa: BLE001 — keep stored URL on failure
+                        pass
+                refreshed.append(item)
+            data['documents'] = refreshed
         return data
 
 

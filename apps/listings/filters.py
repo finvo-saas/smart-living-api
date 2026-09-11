@@ -27,6 +27,11 @@ class PropertyFilter(django_filters.FilterSet):
         field_name='floor_level',
         lookup_expr='lte',
     )
+    bedrooms = django_filters.NumberFilter(field_name='bedrooms', lookup_expr='gte')
+    bathrooms = django_filters.NumberFilter(field_name='bathrooms', lookup_expr='gte')
+    sizeSqftMin = django_filters.NumberFilter(field_name='size_sqft', lookup_expr='gte')
+    sizeSqftMax = django_filters.NumberFilter(field_name='size_sqft', lookup_expr='lte')
+    tenantType = django_filters.CharFilter(field_name='tenant_type')
     featured = django_filters.BooleanFilter(field_name='featured')
     search = django_filters.CharFilter(method='filter_search')
 

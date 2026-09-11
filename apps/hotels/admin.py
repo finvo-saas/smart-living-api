@@ -1,10 +1,11 @@
 from django.contrib import admin
 
+from core.admin import TimestampedModelAdmin
 from hotels.models import Hotel, HotelBooking, HotelReview, Room, RoomPrice
 
 
 @admin.register(Hotel)
-class HotelAdmin(admin.ModelAdmin):
+class HotelAdmin(TimestampedModelAdmin):
     list_display = (
         'name',
         'type',
@@ -22,21 +23,21 @@ class HotelAdmin(admin.ModelAdmin):
 
 
 @admin.register(Room)
-class RoomAdmin(admin.ModelAdmin):
+class RoomAdmin(TimestampedModelAdmin):
     list_display = ('hotel', 'room_number', 'type', 'floor', 'base_price', 'available')
     list_filter = ('type', 'available')
     search_fields = ('room_number', 'hotel__name')
 
 
 @admin.register(RoomPrice)
-class RoomPriceAdmin(admin.ModelAdmin):
+class RoomPriceAdmin(TimestampedModelAdmin):
     list_display = ('room', 'date', 'price', 'is_weekend', 'is_special_offer')
     list_filter = ('is_weekend', 'is_special_offer')
     date_hierarchy = 'date'
 
 
 @admin.register(HotelBooking)
-class HotelBookingAdmin(admin.ModelAdmin):
+class HotelBookingAdmin(TimestampedModelAdmin):
     list_display = (
         'hotel',
         'room',
@@ -53,7 +54,7 @@ class HotelBookingAdmin(admin.ModelAdmin):
 
 
 @admin.register(HotelReview)
-class HotelReviewAdmin(admin.ModelAdmin):
-    list_display = ('hotel', 'user', 'rating', 'created_at')
+class HotelReviewAdmin(TimestampedModelAdmin):
+    list_display = ('hotel', 'user', 'rating')
     list_filter = ('rating',)
     search_fields = ('hotel__name', 'user__phone', 'comment')
