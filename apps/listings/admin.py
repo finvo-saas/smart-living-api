@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from core.admin import TimestampedModelAdmin
-from listings.models import Property, PropertyImage, PropertyReview
+from listings.models import Property, PropertyImage, PropertyReview, ListingTakenReport
 
 
 class PropertyImageInline(admin.TabularInline):
@@ -27,6 +27,13 @@ class PropertyAdmin(TimestampedModelAdmin):
     list_filter = ('type', 'city', 'published', 'listing_status', 'featured', 'verified')
     search_fields = ('name', 'area', 'address', 'owner__phone')
     inlines = [PropertyImageInline]
+
+
+@admin.register(ListingTakenReport)
+class ListingTakenReportAdmin(TimestampedModelAdmin):
+    list_display = ('listing', 'reporter', 'status', 'created_at', 'resolved_at')
+    list_filter = ('status',)
+    search_fields = ('listing__name',)
 
 
 @admin.register(PropertyReview)

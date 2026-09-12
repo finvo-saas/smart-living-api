@@ -100,12 +100,13 @@ def summarize_area(area: str, city: str | None = None) -> dict:
         round(0.4 * security_pct + 0.3 * verified_pct + 0.3 * min(100, avg_rating * 20)),
     )
     city_name = city or (listings[0].city if listings else '')
-    living = estimate_living_cost(
-        rent=avg_rent,
-        city=city_name,
-        area=area,
-        property_type='apartment',
-    )
+    from listings.services.living_cost import living_cost_for_property
+
+    costs = [
+        living_cost_for_property(prop)
+        for prop in qs.prefetch_related('linked_messes', 'linked_flats')[:80]
+    ]
+    living = _average_living_cost(costs) if costs else estimate_living_cost(rent=avg_rent)
     return {
         'area': listings[0].area if listings else area,
         'city': city_name,
@@ -139,6 +140,19 @@ def _keyword_score(listings: list, keys: tuple[str, ...]) -> int:
         if any(k in blob for k in keys):
             hits += 1
     return round(100 * hits / len(listings))
+
+
+def _average_living_cost(costs: list[dict]) -> dict:
+    keys = ('rent', 'serviceCharge', 'electricity', 'gas', 'internet', 'water', 'transport', 'meals')
+    count = len(costs) or 1
+    parts = {key: round(sum(item.get(key) or 0 for item in costs) / count) for key in keys}
+    return {
+        **parts,
+        'total': sum(parts.values()),
+        'currency': 'BDT',
+        'shared': False,
+        'note': 'Average of owner estimates on listings in this area.',
+    }
 
 
 def _recommend(results: list[dict]) -> dict:

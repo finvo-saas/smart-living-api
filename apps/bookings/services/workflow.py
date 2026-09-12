@@ -34,31 +34,29 @@ def _display_name(user) -> str:
     return user.name or f'User {user.phone[-4:]}'
 
 
+@transaction.atomic
 def create_booking(user, data: dict) -> PropertyBooking:
-    from django.conf import settings
-
-    if getattr(settings, 'CIMS_ENFORCE_BOOKING', True):
-        from accounts.models import Role, UserProfile
-
-        if getattr(user, 'role', None) in (Role.RENTER, Role.OWNER, 'renter', 'owner'):
-            profile, _ = UserProfile.objects.get_or_create(user=user)
-            if not profile.cims_registered:
-                raise ForbiddenError(
-                    'CIMS registration is required before booking. '
-                    'Complete CIMS details in Profile (DMP compliance).',
-                    code='CIMS_REQUIRED',
-                )
+    """CIMS is optional. Renters book a listing, which occupies its linked flat."""
 
     try:
         prop = Property.objects.select_related('owner').get(pk=data['property_id'])
     except Property.DoesNotExist as exc:
         raise NotFoundError('Property not found.') from exc
 
-    if not prop.available:
-        raise UnavailableError('This property is not available for booking.')
-
     if not prop.published or prop.listing_status != ListingStatus.PUBLISHED:
         raise UnpublishedError('This property is not published.')
+
+    linked_flat = None
+    if prop.type == PropertyType.APARTMENT:
+        from listings.services.inventory import apartment_is_bookable, linked_apartment_flat
+
+        linked_flat = linked_apartment_flat(prop)
+        if not apartment_is_bookable(prop):
+            raise UnavailableError(
+                'This apartment is not free to book. It needs one vacant flat linked to the listing.',
+            )
+    elif not prop.available:
+        raise UnavailableError('This property is not available for booking.')
 
     conflict = PropertyBooking.objects.filter(
         property=prop,
@@ -68,6 +66,9 @@ def create_booking(user, data: dict) -> PropertyBooking:
     ).exists()
     if conflict:
         raise ConflictError('You already have an active booking for this property.')
+
+    if prop.owner_id == user.id:
+        raise InvalidError('You cannot book your own listing.')
 
     duration = data.get('duration') or 1
     rent = Decimal(prop.rent)
@@ -111,24 +112,8 @@ def create_booking(user, data: dict) -> PropertyBooking:
         approved_at=approved_at,
     )
 
-    # Instant apartment book: auto-assign when exactly one vacant linked flat exists.
-    if (
-        status == BookingStatus.APPROVED
-        and prop.type == PropertyType.APARTMENT
-    ):
-        from portfolio.models import Flat, FlatStatus
-
-        linked = list(
-            Flat.objects.filter(
-                listing=prop,
-                status=FlatStatus.AVAILABLE,
-            ).order_by('floor_number', 'flat_number')[:2]
-        )
-        if len(linked) == 1:
-            try:
-                _assign_flat_to_booking(booking, linked[0].id, actor=owner)
-            except Exception:  # noqa: BLE001
-                pass
+    if status == BookingStatus.APPROVED and linked_flat is not None:
+        _assign_flat_to_booking(booking, linked_flat.id, actor=owner)
 
     return booking
 
@@ -139,7 +124,7 @@ def _assign_flat_to_booking(booking: PropertyBooking, flat_id, *, actor) -> None
     from listings.services.inventory import sync_flat_listing
 
     try:
-        flat = Flat.objects.select_related('building').get(pk=flat_id)
+        flat = Flat.objects.select_for_update().select_related('building').get(pk=flat_id)
     except Flat.DoesNotExist as exc:
         raise NotFoundError('Flat not found.') from exc
 
@@ -216,14 +201,17 @@ def patch_status(
         if not (is_owner or is_admin):
             raise ForbiddenError('Only the owner can approve bookings.')
 
-        # Apartment bookings require a vacant flat → tenancy.
+        # Apartment bookings occupy the one flat linked to the listing.
         if booking.property_type == PropertyType.APARTMENT:
-            if not flat_id:
+            from listings.services.inventory import linked_apartment_flat
+            from portfolio.models import FlatStatus
+
+            linked = linked_apartment_flat(booking.property)
+            if linked is None or linked.status != FlatStatus.AVAILABLE:
                 raise InvalidError(
-                    'Select a vacant flat to approve this apartment booking.',
-                    code='FLAT_REQUIRED',
+                    'This listing is not linked to a vacant flat. Attach one in My listings before approving.',
                 )
-            _assign_flat_to_booking(booking, flat_id, actor=actor)
+            _assign_flat_to_booking(booking, linked.id, actor=actor)
 
         booking.status = BookingStatus.APPROVED
         booking.approved_at = now
@@ -255,6 +243,7 @@ def patch_status(
             raise ForbiddenError('You cannot cancel this booking.')
         if not reason:
             raise ReasonRequiredError('Cancellation reason is required.')
+        was_approved = booking.status == BookingStatus.APPROVED
         booking.status = BookingStatus.CANCELLED
         booking.cancelled_at = now
         booking.cancellation_reason = reason
@@ -266,6 +255,10 @@ def patch_status(
                 'updated_at',
             ],
         )
+        if was_approved:
+            from listings.services.inventory import release_booking_occupancy
+
+            release_booking_occupancy(booking)
         return booking
 
     if status == BookingStatus.COMPLETED:
@@ -276,6 +269,9 @@ def patch_status(
         booking.status = BookingStatus.COMPLETED
         booking.completed_at = now
         booking.save(update_fields=['status', 'completed_at', 'updated_at'])
+        from listings.services.inventory import release_booking_occupancy
+
+        release_booking_occupancy(booking)
         return booking
 
     raise InvalidStateError(f'Unsupported status: {status}')

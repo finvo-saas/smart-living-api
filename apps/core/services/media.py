@@ -232,6 +232,52 @@ class MediaStorageService:
         if backend.exists(key):
             backend.delete(key)
 
+    def key_from_url(self, url: str) -> str:
+        """Derive a storage key from a public CDN / Spaces URL."""
+        from urllib.parse import unquote, urlparse
+
+        raw = (url or '').strip()
+        if not raw:
+            return ''
+        if '://' not in raw:
+            path = raw.lstrip('/')
+        else:
+            path = unquote(urlparse(raw).path or '').lstrip('/')
+        root = (self.root_folder or '').strip('/')
+        if root and path.startswith(f'{root}/'):
+            path = path[len(root) + 1 :]
+        return path.replace('\\', '/').lstrip('/')
+
+    def assert_deletable_key(self, key: str, *, kind: str | None = None) -> str:
+        """Only allow deletes under known public upload folders."""
+        normalized = (key or '').replace('\\', '/').strip().lstrip('/')
+        if not normalized or '..' in normalized or normalized.startswith('/'):
+            raise InvalidError('Invalid media key.')
+        if kind:
+            folder = self.spec(kind).folder
+            if not normalized.startswith(f'{folder}/'):
+                raise InvalidError('That file is outside the allowed folder.')
+            return normalized
+        public_folders = tuple(
+            f'{rule.folder}/' for rule in KIND_RULES.values() if not rule.private
+        )
+        if not any(normalized.startswith(prefix) for prefix in public_folders):
+            raise InvalidError('That file cannot be deleted.')
+        return normalized
+
+    def delete_by_url_or_key(
+        self,
+        *,
+        url: str = '',
+        key: str = '',
+        kind: str | None = None,
+    ) -> str:
+        resolved = (key or '').strip() or self.key_from_url(url)
+        resolved = self.assert_deletable_key(resolved, kind=kind)
+        private = self.spec(kind).private if kind else False
+        self.delete(resolved, private=private)
+        return resolved
+
     @property
     def root_folder(self) -> str:
         return getattr(settings, 'AWS_LOCATION', '') or ''

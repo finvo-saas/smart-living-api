@@ -12,6 +12,12 @@ def _money(value) -> float:
     return float(value)
 
 
+def _bill(value):
+    if value is None:
+        return None
+    return _money(value)
+
+
 def _date_str(dt) -> str:
     if dt is None:
         return ''
@@ -73,6 +79,10 @@ class FlatSerializer(serializers.ModelSerializer):
     renter = serializers.SerializerMethodField()
     deposit = serializers.SerializerMethodField()
     tenancyId = serializers.SerializerMethodField()
+    electricityBill = serializers.SerializerMethodField()
+    gasBill = serializers.SerializerMethodField()
+    internetBill = serializers.SerializerMethodField()
+    waterBill = serializers.SerializerMethodField()
 
     class Meta:
         model = Flat
@@ -90,6 +100,10 @@ class FlatSerializer(serializers.ModelSerializer):
             'bathrooms',
             'deposit',
             'tenancyId',
+            'electricityBill',
+            'gasBill',
+            'internetBill',
+            'waterBill',
         )
 
     def _tenancy(self, obj: Flat):
@@ -115,6 +129,18 @@ class FlatSerializer(serializers.ModelSerializer):
         tenancy = self._tenancy(obj)
         return str(tenancy.id) if tenancy else None
 
+    def get_electricityBill(self, obj):
+        return _bill(obj.electricity_bill)
+
+    def get_gasBill(self, obj):
+        return _bill(obj.gas_bill)
+
+    def get_internetBill(self, obj):
+        return _bill(obj.internet_bill)
+
+    def get_waterBill(self, obj):
+        return _bill(obj.water_bill)
+
 
 class FlatWriteSerializer(serializers.ModelSerializer):
     flatNumber = serializers.CharField(source='flat_number')
@@ -122,6 +148,18 @@ class FlatWriteSerializer(serializers.ModelSerializer):
     buildingId = serializers.UUIDField(source='building_id', required=False)
     listingId = serializers.UUIDField(required=False, allow_null=True)
     rent = serializers.DecimalField(max_digits=12, decimal_places=2)
+    electricityBill = serializers.DecimalField(
+        source='electricity_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
+    )
+    gasBill = serializers.DecimalField(
+        source='gas_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
+    )
+    internetBill = serializers.DecimalField(
+        source='internet_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
+    )
+    waterBill = serializers.DecimalField(
+        source='water_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
+    )
 
     class Meta:
         model = Flat
@@ -135,6 +173,10 @@ class FlatWriteSerializer(serializers.ModelSerializer):
             'area',
             'bedrooms',
             'bathrooms',
+            'electricityBill',
+            'gasBill',
+            'internetBill',
+            'waterBill',
         )
 
     def validate_rent(self, value):
@@ -150,6 +192,9 @@ class FlatWriteSerializer(serializers.ModelSerializer):
 
             attach_listing_to_flat(flat, listing_id)
             flat.refresh_from_db()
+        from listings.services.inventory import push_flat_bills_to_listing
+
+        push_flat_bills_to_listing(flat)
         return flat
 
 
@@ -161,6 +206,18 @@ class FlatPatchSerializer(serializers.ModelSerializer):
         max_digits=12,
         decimal_places=2,
         required=False,
+    )
+    electricityBill = serializers.DecimalField(
+        source='electricity_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
+    )
+    gasBill = serializers.DecimalField(
+        source='gas_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
+    )
+    internetBill = serializers.DecimalField(
+        source='internet_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
+    )
+    waterBill = serializers.DecimalField(
+        source='water_bill', max_digits=12, decimal_places=2, required=False, allow_null=True,
     )
 
     class Meta:
@@ -174,6 +231,10 @@ class FlatPatchSerializer(serializers.ModelSerializer):
             'area',
             'bedrooms',
             'bathrooms',
+            'electricityBill',
+            'gasBill',
+            'internetBill',
+            'waterBill',
         )
 
     def update(self, instance, validated_data):
@@ -184,6 +245,9 @@ class FlatPatchSerializer(serializers.ModelSerializer):
 
             attach_listing_to_flat(flat, listing_id)
             flat.refresh_from_db()
+        from listings.services.inventory import push_flat_bills_to_listing
+
+        push_flat_bills_to_listing(flat)
         return flat
 
 

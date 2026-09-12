@@ -96,6 +96,34 @@ class Flat(UUIDModel, TimestampedModel):
     area = models.PositiveIntegerField(null=True, blank=True)
     bedrooms = models.PositiveSmallIntegerField(null=True, blank=True)
     bathrooms = models.PositiveSmallIntegerField(null=True, blank=True)
+    electricity_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly electricity estimate for this flat in BDT.',
+    )
+    gas_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly gas estimate for this flat in BDT.',
+    )
+    internet_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly internet estimate for this flat in BDT.',
+    )
+    water_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly water estimate for this flat in BDT.',
+    )
     listing = models.ForeignKey(
         'listings.Property',
         on_delete=models.SET_NULL,

@@ -66,6 +66,18 @@ class PhoneTokenObtainPairView(TokenObtainPairView):
     serializer_class = PhoneTokenObtainPairSerializer
 
 
+def _active_system_admin(phone: str):
+    user = (
+        User.objects.filter(phone=phone, is_active=True)
+        .select_related('admin_profile')
+        .first()
+    )
+    admin = getattr(user, 'admin_profile', None) if user else None
+    if not user or not admin or not admin.is_active:
+        raise NotFoundError('This phone is not registered as a system admin.')
+    return user
+
+
 def _user_payload(user, request=None) -> dict:
     return user_payload(user, request)
 
@@ -93,8 +105,11 @@ class LoginStartView(APIView):
         serializer = LoginStartSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         phone = serializer.validated_data['phone']
+        as_admin = serializer.validated_data.get('asAdmin')
 
         user = User.objects.filter(phone=phone).first()
+        if as_admin:
+            user = _active_system_admin(phone)
         if user and not user.is_active:
             raise ForbiddenError('This account has been deactivated.')
 
@@ -171,17 +186,21 @@ class OTPVerifyView(APIView):
         phone = serializer.validated_data['phone']
         otp = serializer.validated_data['otp']
         purpose = serializer.validated_data['purpose']
+        as_admin = serializer.validated_data.get('asAdmin')
 
-        verify_otp(phone=phone, code=otp, purpose=purpose)
-
-        user, _created = User.objects.get_or_create(
-            phone=phone,
-            defaults={
-                'is_phone_verified': True,
-                'role': Role.RENTER,
-                'role_selected': False,
-            },
-        )
+        if as_admin:
+            user = _active_system_admin(phone)
+            verify_otp(phone=phone, code=otp, purpose=purpose)
+        else:
+            verify_otp(phone=phone, code=otp, purpose=purpose)
+            user, _created = User.objects.get_or_create(
+                phone=phone,
+                defaults={
+                    'is_phone_verified': True,
+                    'role': Role.RENTER,
+                    'role_selected': False,
+                },
+            )
         if not user.is_active:
             raise ForbiddenError('This account has been deactivated.')
 

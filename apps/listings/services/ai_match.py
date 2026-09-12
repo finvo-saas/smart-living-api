@@ -4,7 +4,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from django.db.models import Q
+
 from listings.models import ListingStatus, Property
+from listings.services.public_catalog import unique_public_listings
 
 
 # Bangla and English keyword maps
@@ -42,8 +45,14 @@ TYPE_KEYWORDS = {
 }
 
 GENDER_KEYWORDS = {
-    'male': ['male', 'boys', 'ছেলে', 'ছেলেদের', 'bachelor', 'ব্যাচেলর'],
-    'female': ['female', 'girls', 'মেয়ে', 'মেয়েদের', 'মহিলা'],
+    'male': [
+        'male', 'boys', 'boy', 'chele', 'cheleder',
+        'ছেলে', 'ছেলেদের', 'bachelor', 'ব্যাচেলর',
+    ],
+    'female': [
+        'female', 'girls', 'girl', 'meye', 'meyeder',
+        'মেয়ে', 'মেয়েদের', 'মহিলা', 'ladies',
+    ],
     'family': ['family', 'ফ্যামিলি', 'পরিবার'],
 }
 
@@ -91,6 +100,24 @@ def _extract_bedrooms(text: str) -> int | None:
     if match:
         return int(match.group(1))
     return None
+
+
+def _place_aliases(place: str) -> list[str]:
+    key = (place or '').strip().lower()
+    return AREA_ALIASES.get(key, [key])
+
+
+def _listing_text(prop: Property) -> str:
+    return ' '.join(
+        part
+        for part in (prop.name, prop.area, prop.address, prop.city)
+        if part
+    ).lower()
+
+
+def _mentions_place(prop: Property, place: str) -> bool:
+    blob = _listing_text(prop)
+    return any(alias in blob for alias in _place_aliases(place))
 
 
 def _extract_area(text: str) -> str | None:
@@ -195,8 +222,10 @@ def compute_match_score(prop: Property, parsed: dict[str, Any]) -> float:
         prop_area = (prop.area or '').lower()
         prop_city = (prop.city or '').lower()
         target = parsed['area'].lower()
-        aliases = AREA_ALIASES.get(target, [target])
+        aliases = _place_aliases(target)
         if any(a in prop_area for a in aliases):
+            score += 30
+        elif _mentions_place(prop, target):
             score += 30
         elif any(a in prop_city for a in aliases):
             score += 15
@@ -269,7 +298,13 @@ def ai_match_properties(query: str, *, limit: int = 20) -> dict[str, Any]:
         listing_status=ListingStatus.PUBLISHED,
         flagged_unavailable_at__isnull=True,
         available=True,
-    ).select_related('owner').prefetch_related('image_files')
+    ).filter(
+        ~Q(type='apartment') | Q(linked_flats__status='available')
+    ).distinct().select_related('owner').prefetch_related(
+        'image_files',
+        'linked_messes',
+        'linked_flats__building',
+    )
 
     # Pre-filter by city/area if detected (performance)
     if parsed.get('city'):
@@ -277,7 +312,12 @@ def ai_match_properties(query: str, *, limit: int = 20) -> dict[str, Any]:
     if parsed.get('type'):
         qs = qs.filter(type=parsed['type'])
 
-    candidates = list(qs[:200])
+    candidates = unique_public_listings(list(qs[:200]))
+    place = parsed.get('area')
+    if place:
+        located = [prop for prop in candidates if _mentions_place(prop, place)]
+        if located:
+            candidates = located
 
     # Score each
     scored = []

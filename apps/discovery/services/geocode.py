@@ -4,6 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -14,6 +17,14 @@ from django.core.cache import cache
 
 logger = logging.getLogger('discovery.geocode')
 
+_HOUSE_FRAGMENT = re.compile(
+    r'^(house|holding|road|rd|block|plot|flat|floor|lane|sector)[\s.\-]*([a-z]|\d)',
+    re.IGNORECASE,
+)
+# "Road 12 Block C" exists in several Dhaka areas. If the address also names a
+# neighborhood, a street hit farther than this from that neighborhood is rejected.
+_STREET_DRIFT_KM = 1.5
+
 
 def geocode_address(
     address: str,
@@ -23,15 +34,88 @@ def geocode_address(
 ) -> dict[str, Any] | None:
     """
     Return {'lat': float, 'lng': float, 'displayName': str, 'provider': str} or None.
-    """
-    query_parts = [p for p in (address, area, city, 'Bangladesh') if p]
-    query = ', '.join(query_parts).strip()
-    if len(query) < 5:
-        return None
 
-    # Memcached forbids spaces/commas/control chars in keys — hash the query.
+    A house line like "Road-12, Block-C" is mapped in more than one Dhaka area.
+    When the address also names a neighborhood, that neighborhood wins if the
+    street match is far away.
+    """
+    city = (city or '').strip()
+    area = (area or '').strip()
+    if area.lower() == city.lower():
+        area = ''
+
+    street_query = _join(address, area, city, 'Bangladesh')
+    place_query = _place_query(address, city)
+    if place_query == street_query:
+        place_query = ''
+
+    street_hit = _lookup(street_query) if len(street_query) >= 5 else None
+    place_hit = None
+    if place_query and len(place_query) >= 5:
+        if street_hit is not None:
+            time.sleep(1.1)
+        place_hit = _lookup(place_query)
+
+    if place_hit and street_hit:
+        if _distance_km(place_hit, street_hit) > _STREET_DRIFT_KM:
+            return place_hit
+        return street_hit
+    return street_hit or place_hit
+
+
+def ensure_property_coordinates(prop) -> bool:
+    """Fill lat/lng on property when missing. Returns True if updated."""
+    if prop.latitude is not None and prop.longitude is not None:
+        return False
+    return refresh_property_coordinates(prop)
+
+
+def refresh_property_coordinates(prop) -> bool:
+    """Re-resolve lat/lng from the current address. Returns True if the pin moved."""
+    hit = geocode_address(
+        prop.address or '',
+        city=prop.city or '',
+        area=prop.area or '',
+    )
+    if not hit:
+        return False
+    if (
+        prop.latitude is not None
+        and prop.longitude is not None
+        and abs(float(prop.latitude) - hit['lat']) < 0.00001
+        and abs(float(prop.longitude) - hit['lng']) < 0.00001
+    ):
+        return False
+    prop.latitude = hit['lat']
+    prop.longitude = hit['lng']
+    prop.save(update_fields=['latitude', 'longitude', 'updated_at'])
+    return True
+
+
+def _place_query(address: str, city: str) -> str:
+    parts = [part.strip() for part in re.split(r'[,|\n]', address or '') if part.strip()]
+    places = [part for part in parts if not _HOUSE_FRAGMENT.match(part)]
+    if not places:
+        return ''
+    return _join(*places, city, 'Bangladesh')
+
+
+def _join(*parts: str) -> str:
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in parts:
+        text = (part or '').strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return ', '.join(out)
+
+
+def _lookup(query: str) -> dict[str, Any] | None:
     digest = hashlib.sha256(query.lower().encode('utf-8')).hexdigest()[:32]
-    cache_key = f'geocode:v1:{digest}'
+    cache_key = f'geocode:v2:{digest}'
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
@@ -50,17 +134,13 @@ def geocode_address(
     return result
 
 
-def ensure_property_coordinates(prop) -> bool:
-    """Fill lat/lng on property when missing. Returns True if updated."""
-    if prop.latitude is not None and prop.longitude is not None:
-        return False
-    hit = geocode_address(prop.address or '', city=prop.city or '', area=prop.area or '')
-    if not hit:
-        return False
-    prop.latitude = hit['lat']
-    prop.longitude = hit['lng']
-    prop.save(update_fields=['latitude', 'longitude', 'updated_at'])
-    return True
+def _distance_km(a: dict[str, Any], b: dict[str, Any]) -> float:
+    r = 6371
+    p1, p2 = math.radians(a['lat']), math.radians(b['lat'])
+    dphi = math.radians(b['lat'] - a['lat'])
+    dl = math.radians(b['lng'] - a['lng'])
+    h = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
 
 
 def _geocode_nominatim(query: str) -> dict[str, Any] | None:

@@ -1,10 +1,12 @@
 from django.urls import include, path
 
-from core.views import HealthCheckView, MediaUploadView
+from core.views import HealthCheckView, MediaDeleteView, MediaLibraryView, MediaUploadView
 
 urlpatterns = [
     path('health/', HealthCheckView.as_view(), name='health'),
+    path('media/', MediaLibraryView.as_view(), name='media-library'),
     path('media/upload/', MediaUploadView.as_view(), name='media-upload'),
+    path('media/delete/', MediaDeleteView.as_view(), name='media-delete'),
     path('', include('accounts.urls')),
     path('', include('listings.urls')),
     path('', include('discovery.urls')),

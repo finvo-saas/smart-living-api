@@ -5,6 +5,9 @@ from discovery.views import (
     DiscoverFeedView,
     DiscoverReportView,
     DiscoverSearchView,
+    TakenReportConfirmView,
+    TakenReportDismissView,
+    TakenReportListView,
     HeartbeatPublicView,
     FavoriteCheckView,
     FavoriteListView,
@@ -51,6 +54,17 @@ urlpatterns = [
     ),
     path('discover/confirm/', DiscoverConfirmView.as_view(), name='discover-confirm'),
     path('discover/report/', DiscoverReportView.as_view(), name='discover-report'),
+    path('discover/taken-reports/', TakenReportListView.as_view(), name='taken-reports'),
+    path(
+        'discover/taken-reports/<uuid:pk>/confirm/',
+        TakenReportConfirmView.as_view(),
+        name='taken-report-confirm',
+    ),
+    path(
+        'discover/taken-reports/<uuid:pk>/dismiss/',
+        TakenReportDismissView.as_view(),
+        name='taken-report-dismiss',
+    ),
     path(
         'heartbeat/<str:token>/',
         HeartbeatPublicView.as_view(),

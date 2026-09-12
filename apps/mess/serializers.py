@@ -30,6 +30,12 @@ def _money(value) -> float:
     return float(value)
 
 
+def _bill(value):
+    if value is None:
+        return None
+    return _money(value)
+
+
 def _date_str(dt) -> str:
     if dt is None:
         return ''
@@ -50,6 +56,10 @@ class MessSerializer(serializers.ModelSerializer):
     totalSeats = serializers.IntegerField(source='total_seats', read_only=True)
     availableSeats = serializers.IntegerField(source='available_seats', read_only=True)
     monthlyFee = serializers.FloatField(source='monthly_fee')
+    electricityBill = serializers.SerializerMethodField()
+    gasBill = serializers.SerializerMethodField()
+    internetBill = serializers.SerializerMethodField()
+    waterBill = serializers.SerializerMethodField()
     ownerName = serializers.CharField(source='owner_name', read_only=True)
     ownerPhone = serializers.CharField(source='owner_phone', read_only=True)
     ownerWhatsapp = serializers.SerializerMethodField()
@@ -69,6 +79,7 @@ class MessSerializer(serializers.ModelSerializer):
     mealSystem = serializers.SerializerMethodField()
     utilities = serializers.SerializerMethodField()
     bookUrl = serializers.SerializerMethodField()
+    livingCost = serializers.SerializerMethodField()
 
     class Meta:
         model = Mess
@@ -80,6 +91,10 @@ class MessSerializer(serializers.ModelSerializer):
             'totalSeats',
             'availableSeats',
             'monthlyFee',
+            'electricityBill',
+            'gasBill',
+            'internetBill',
+            'waterBill',
             'gender',
             'facilities',
             'images',
@@ -99,11 +114,24 @@ class MessSerializer(serializers.ModelSerializer):
             'mealSystem',
             'utilities',
             'bookUrl',
+            'livingCost',
         )
 
     def get_ownerWhatsapp(self, obj) -> str:
         """Live from the account so a later profile edit is picked up."""
         return getattr(obj.owner, 'whatsapp_number', '') or ''
+
+    def get_electricityBill(self, obj):
+        return _bill(obj.electricity_bill)
+
+    def get_gasBill(self, obj):
+        return _bill(obj.gas_bill)
+
+    def get_internetBill(self, obj):
+        return _bill(obj.internet_bill)
+
+    def get_waterBill(self, obj):
+        return _bill(obj.water_bill)
 
     def get_latitude(self, obj):
         listing = getattr(obj, 'listing', None)
@@ -143,12 +171,46 @@ class MessSerializer(serializers.ModelSerializer):
             return f'/listings/{obj.listing_id}'
         return None
 
+    def get_livingCost(self, obj):
+        from listings.services.living_cost import (
+            estimate_living_cost,
+            living_cost_for_property,
+        )
+
+        listing = getattr(obj, 'listing', None)
+        if listing is not None:
+            return living_cost_for_property(listing)
+        meal = obj.meal_monthly_charge
+        return estimate_living_cost(
+            rent=float(obj.monthly_fee or 0),
+            property_type='mess',
+            meal_included=meal is not None,
+            meal_cost=float(meal) if meal is not None else None,
+            electricity=float(obj.electricity_bill) if obj.electricity_bill is not None else None,
+            gas=float(obj.gas_bill) if obj.gas_bill is not None else None,
+            internet=float(obj.internet_bill) if obj.internet_bill is not None else None,
+            water=float(obj.water_bill) if obj.water_bill is not None else None,
+            seats=int(obj.total_seats or 0),
+        )
+
 
 class MessCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     address = serializers.CharField(max_length=255)
     city = serializers.CharField(max_length=80)
     monthlyFee = serializers.DecimalField(max_digits=12, decimal_places=2, source='monthly_fee')
+    electricityBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='electricity_bill', required=False, allow_null=True,
+    )
+    gasBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='gas_bill', required=False, allow_null=True,
+    )
+    internetBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='internet_bill', required=False, allow_null=True,
+    )
+    waterBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='water_bill', required=False, allow_null=True,
+    )
     gender = serializers.ChoiceField(choices=['male', 'female', 'mixed'])
     facilities = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     images = serializers.ListField(child=serializers.CharField(), required=False, default=list)
@@ -198,6 +260,18 @@ class MessUpdateSerializer(serializers.Serializer):
         source='monthly_fee',
         required=False,
     )
+    electricityBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='electricity_bill', required=False, allow_null=True,
+    )
+    gasBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='gas_bill', required=False, allow_null=True,
+    )
+    internetBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='internet_bill', required=False, allow_null=True,
+    )
+    waterBill = serializers.DecimalField(
+        max_digits=12, decimal_places=2, source='water_bill', required=False, allow_null=True,
+    )
     gender = serializers.ChoiceField(
         choices=['male', 'female', 'mixed'],
         required=False,
@@ -227,18 +301,37 @@ class MessUpdateSerializer(serializers.Serializer):
             sync_mess_listing,
         )
 
+        address_changed = 'address' in data or 'city' in data
         if publish_listing is True:
             listing = ensure_listing_for_mess(mess)
-            try:
-                from discovery.services.geocode import ensure_property_coordinates
-
-                ensure_property_coordinates(listing)
-            except Exception:
-                pass
         else:
-            sync_mess_listing(mess)
+            listing = sync_mess_listing(mess)
+        if listing is not None:
+            _refresh_listing_pin(listing, force=address_changed)
         mess.refresh_from_db()
         return mess
+
+
+def _refresh_listing_pin(listing, *, force: bool) -> None:
+    """Fill a missing pin, or move it when the owner changed the address."""
+    try:
+        from discovery.services.geocode import (
+            ensure_property_coordinates,
+            refresh_property_coordinates,
+        )
+        from listings.services.poi_enrich import refresh_nearby_facilities
+
+        moved = (
+            refresh_property_coordinates(listing)
+            if force
+            else ensure_property_coordinates(listing)
+        )
+        if moved:
+            listing.refresh_from_db()
+            if listing.latitude is not None and listing.longitude is not None:
+                refresh_nearby_facilities(listing)
+    except Exception:
+        return
 
 
 class StudentSerializer(serializers.ModelSerializer):

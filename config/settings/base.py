@@ -335,7 +335,7 @@ STORAGE_ROOT_FOLDER = _env_first(
     'ROOT_FOLDER',
     default='smart-living-system',
 ).strip('/')
-AWS_LOCATION = STORAGE_ROOT_FOLDER
+MEDIA_SERVE_SIGNED = _env_bool('MEDIA_SERVE_SIGNED', False)
 # S3-compatible object storage (DigitalOcean Spaces today; AWS S3 later).
 # Same backends — change credentials/endpoint, not application code.
 # AWS S3: set AWS_* and leave DO_* / AWS_S3_ENDPOINT_URL empty.
@@ -471,7 +471,7 @@ AI_MATCH_LLM_BASE_URL = os.environ.get(
 AI_MATCH_LLM_MODEL = os.environ.get('AI_MATCH_LLM_MODEL', 'gpt-4o-mini').strip()
 
 # CIMS — require registration before property booking
-CIMS_ENFORCE_BOOKING = _env_bool('CIMS_ENFORCE_BOOKING', True)
+CIMS_ENFORCE_BOOKING = _env_bool('CIMS_ENFORCE_BOOKING', False)
 
 # Geocoding
 GEOCODER_PROVIDER = os.environ.get('GEOCODER_PROVIDER', 'nominatim').strip().lower()

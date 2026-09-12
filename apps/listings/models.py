@@ -150,6 +150,34 @@ class Property(UUIDModel, TimestampedModel):
         blank=True,
         help_text='Primary facing direction (Bproperty-style overview).',
     )
+    electricity_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Mess/hostel: house total. Apartment: this flat’s monthly estimate.',
+    )
+    gas_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Mess/hostel: house total. Apartment: this flat’s monthly estimate.',
+    )
+    internet_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Mess/hostel: house total. Apartment: this flat’s monthly estimate.',
+    )
+    water_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Mess/hostel: house total. Apartment: this flat’s monthly estimate.',
+    )
     service_charge = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -320,3 +348,40 @@ class PropertyReview(UUIDModel, TimestampedModel):
 
     def __str__(self):
         return f'{self.property_id}:{self.user_id}:{self.rating}'
+
+
+class TakenReportStatus(models.TextChoices):
+    PENDING = 'pending', 'Pending'
+    CONFIRMED = 'confirmed', 'Confirmed'
+    DISMISSED = 'dismissed', 'Dismissed'
+
+
+class ListingTakenReport(UUIDModel, TimestampedModel):
+    """A visitor says a listing may already be taken. Does not hide it."""
+
+    listing = models.ForeignKey(
+        Property,
+        on_delete=models.CASCADE,
+        related_name='taken_reports',
+    )
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='taken_reports',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=TakenReportStatus.choices,
+        default=TakenReportStatus.PENDING,
+        db_index=True,
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'listings_taken_report'
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f'{self.listing_id} {self.status}'

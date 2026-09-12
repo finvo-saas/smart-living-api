@@ -11,6 +11,7 @@ from core.exceptions import ForbiddenError, InvalidError, NotFoundError
 from core.services.media import media_storage
 from listings.filters import PropertyFilter
 from listings.models import ListingStatus, Property, PropertyImage, PropertyReview
+from listings.services.public_catalog import unique_public_listings
 from listings.serializers import (
     BatchIdsSerializer,
     OwnerResponseSerializer,
@@ -35,14 +36,26 @@ def _nid_prefetch():
 
 
 def _published_qs():
+    from portfolio.models import FlatStatus
+
     return (
         Property.objects.filter(
             published=True,
             listing_status=ListingStatus.PUBLISHED,
             flagged_unavailable_at__isnull=True,
         )
+        .filter(
+            ~Q(type='apartment')
+            | Q(linked_flats__status=FlatStatus.AVAILABLE)
+        )
+        .distinct()
         .select_related('owner')
-        .prefetch_related('image_files', _nid_prefetch())
+        .prefetch_related(
+            'image_files',
+            'linked_messes',
+            'linked_flats__building',
+            _nid_prefetch(),
+        )
     )
 
 
@@ -75,12 +88,17 @@ class PropertyListCreateView(APIView):
                 q |= Q(nearby_facilities__icontains=fac)
             filtered = filtered.filter(q).distinct()
 
-        return Response(api_success(_serialize_many(filtered, request)))
+        return Response(
+            api_success(_serialize_many(unique_public_listings(filtered), request))
+        )
 
     def post(self, request):
         if request.user.role not in ('owner', 'admin'):
             raise ForbiddenError('Only owners can create listings.')
-        serializer = PropertyWriteSerializer(data=request.data)
+        serializer = PropertyWriteSerializer(
+            data=request.data,
+            context={'request': request},
+        )
         serializer.is_valid(raise_exception=True)
         images = serializer.validated_data.get('images') or request.data.get('images')
         if not images:
@@ -134,6 +152,7 @@ class PropertyDetailView(APIView):
             prop,
             data=request.data,
             partial=True,
+            context={'request': request},
         )
         serializer.is_valid(raise_exception=True)
         prop = serializer.save()
@@ -208,7 +227,9 @@ class FeaturedPropertiesView(APIView):
             | Q(verified=True),
         )
         # Score-ish ordering: featured first, then rating
-        props = list(qs.order_by('-featured', '-rating', '-created_at')[:limit])
+        props = unique_public_listings(
+            qs.order_by('-featured', '-rating', '-created_at')[: limit * 3]
+        )[:limit]
         return Response(api_success(_serialize_many(props, request)))
 
 
@@ -243,10 +264,10 @@ class PropertyRecommendationsView(APIView):
 
         limit = int(request.query_params.get('limit', 4))
         limit = max(1, min(limit, 20))
-        candidates = list(
+        candidates = unique_public_listings(
             _published_qs()
             .exclude(pk=pk)
-            .filter(available=True)[:80],
+            .filter(available=True)[:80]
         )
 
         def score(p: Property) -> float:

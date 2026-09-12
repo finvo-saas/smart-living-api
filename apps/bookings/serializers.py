@@ -1,3 +1,7 @@
+from datetime import date, datetime
+
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import serializers
 
 from bookings.models import PropertyBooking
@@ -112,17 +116,47 @@ class PropertyBookingSerializer(serializers.ModelSerializer):
         return _money(obj.total_amount)
 
 
+def _coerce_date(value):
+    """Accept YYYY-MM-DD and ISO timestamps. Calendar dates stay on the picked day."""
+    if value in (None, ''):
+        return None
+    if isinstance(value, datetime):
+        if timezone.is_aware(value):
+            value = timezone.localtime(value)
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    parsed = parse_date(text)
+    if parsed is not None:
+        return parsed
+    parsed_dt = parse_datetime(text)
+    if parsed_dt is not None:
+        if timezone.is_aware(parsed_dt):
+            parsed_dt = timezone.localtime(parsed_dt)
+        return parsed_dt.date()
+    raise serializers.ValidationError('Use a date like YYYY-MM-DD.')
+
+
 class PropertyBookingCreateSerializer(serializers.Serializer):
     propertyId = serializers.UUIDField()
-    moveInDate = serializers.DateField()
-    moveOutDate = serializers.DateField(required=False, allow_null=True)
+    moveInDate = serializers.CharField()
+    moveOutDate = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     duration = serializers.IntegerField(min_value=1, required=False, default=1)
     message = serializers.CharField(required=False, allow_blank=True, default='')
     specialRequests = serializers.CharField(required=False, allow_blank=True, default='')
 
     def validate(self, attrs):
-        move_in = attrs['moveInDate']
-        move_out = attrs.get('moveOutDate')
+        try:
+            move_in = _coerce_date(attrs['moveInDate'])
+        except serializers.ValidationError as exc:
+            raise serializers.ValidationError({'moveInDate': exc.detail}) from exc
+        if move_in is None:
+            raise serializers.ValidationError({'moveInDate': 'Move-in date is required.'})
+        try:
+            move_out = _coerce_date(attrs.get('moveOutDate'))
+        except serializers.ValidationError as exc:
+            raise serializers.ValidationError({'moveOutDate': exc.detail}) from exc
         if move_out and move_out <= move_in:
             raise serializers.ValidationError(
                 {'moveOutDate': 'Move-out must be after move-in.'},

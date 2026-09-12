@@ -237,6 +237,7 @@ class OTPVerifySerializer(serializers.Serializer):
         required=False,
         default='login',
     )
+    asAdmin = serializers.BooleanField(required=False, default=False)
 
     def validate_phone(self, value):
         return normalize_bd_phone(value)
@@ -286,6 +287,7 @@ class LogoutSerializer(serializers.Serializer):
 
 class LoginStartSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20)
+    asAdmin = serializers.BooleanField(required=False, default=False)
 
     def validate_phone(self, value):
         return normalize_bd_phone(value)

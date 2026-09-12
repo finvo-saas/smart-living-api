@@ -1,9 +1,51 @@
 """Keep public listings in sync with mess seats and portfolio flats."""
 from __future__ import annotations
 
+from django.db.models import Q
 from django.utils import timezone
 
 from listings.models import Property, PropertyType
+
+
+BILL_FIELDS = (
+    'electricity_bill',
+    'gas_bill',
+    'internet_bill',
+    'water_bill',
+)
+
+
+def copy_utility_bills(source, target) -> list[str]:
+    changed = []
+    for field in BILL_FIELDS:
+        value = getattr(source, field, None)
+        if getattr(target, field, None) != value:
+            setattr(target, field, value)
+            changed.append(field)
+    return changed
+
+
+def push_flat_bills_to_listing(flat) -> None:
+    listing = flat.listing
+    if listing is None:
+        return
+    if not any(getattr(flat, field) is not None for field in BILL_FIELDS):
+        return
+    changed = copy_utility_bills(flat, listing)
+    if changed:
+        listing.save(update_fields=changed + ['updated_at'])
+
+
+def push_listing_bills_to_flat(listing) -> None:
+    """Keep the flat form in step when this listing is one flat."""
+    if listing.type != PropertyType.APARTMENT:
+        return
+    flats = list(listing.linked_flats.all()[:2])
+    if len(flats) != 1:
+        return
+    changed = copy_utility_bills(listing, flats[0])
+    if changed:
+        flats[0].save(update_fields=changed + ['updated_at'])
 
 
 def _apply_availability(listing: Property, available: bool, open_seats=None):
@@ -28,7 +70,7 @@ def _apply_availability(listing: Property, available: bool, open_seats=None):
 
 
 def sync_mess_listing(mess) -> Property | None:
-    """Mirror mess available_seats onto the linked public listing."""
+    """Mirror mess inventory + marketing fields onto the linked public listing."""
     listing = mess.listing
     if listing is None:
         listing = _find_matching_listing(mess)
@@ -37,15 +79,40 @@ def sync_mess_listing(mess) -> Property | None:
             mess.save(update_fields=['listing', 'updated_at'])
     if listing is None:
         return None
-    if int(mess.total_seats or 0) == 0:
-        return listing
 
     previous_open = listing.open_seats
     open_seats = int(mess.available_seats or 0)
-    _apply_availability(listing, available=open_seats > 0, open_seats=open_seats)
-    from listings.services.vacancy_flash import maybe_flash_on_seat_increase
+    if int(mess.total_seats or 0) > 0:
+        _apply_availability(listing, available=open_seats > 0, open_seats=open_seats)
 
-    maybe_flash_on_seat_increase(listing, previous_open, open_seats)
+    listing.name = mess.name or listing.name
+    listing.address = mess.address or listing.address
+    listing.city = mess.city or listing.city
+    listing.area = mess.city or listing.area
+    listing.rent = mess.monthly_fee
+    listing.description = mess.description or listing.description
+    listing.image_urls = list(mess.images or [])
+    listing.facilities = list(mess.facilities or [])
+    copy_utility_bills(mess, listing)
+    listing.save(
+        update_fields=[
+            'name',
+            'address',
+            'city',
+            'area',
+            'rent',
+            'description',
+            'image_urls',
+            'facilities',
+            *BILL_FIELDS,
+            'updated_at',
+        ],
+    )
+
+    if int(mess.total_seats or 0) > 0:
+        from listings.services.vacancy_flash import maybe_flash_on_seat_increase
+
+        maybe_flash_on_seat_increase(listing, previous_open, open_seats)
     return listing
 
 
@@ -85,15 +152,86 @@ def attach_listing_to_mess(mess, property_id) -> None:
 
 
 def sync_flat_listing(flat) -> Property | None:
-    """A listing stays available if any linked flat is still vacant."""
+    """A listing is available only while its linked flat is vacant."""
     listing = flat.listing
     if listing is None:
         return None
+    refresh_listing_availability(listing)
+    push_flat_bills_to_listing(flat)
+    return listing
+
+
+def linked_apartment_flat(listing):
+    """The one flat this apartment listing is for, if any."""
+    if getattr(listing, 'type', None) != PropertyType.APARTMENT:
+        return None
+    related = getattr(listing, 'linked_flats', None)
+    if related is None:
+        return None
+    return related.select_related('building').order_by('created_at').first()
+
+
+def apartment_is_bookable(listing) -> bool:
     from portfolio.models import FlatStatus
 
-    any_open = listing.linked_flats.filter(status=FlatStatus.AVAILABLE).exists()
-    _apply_availability(listing, available=any_open, open_seats=None)
-    return listing
+    flat = linked_apartment_flat(listing)
+    return flat is not None and flat.status == FlatStatus.AVAILABLE
+
+
+def refresh_listing_availability(listing) -> None:
+    from portfolio.models import FlatStatus
+
+    if listing.type == PropertyType.APARTMENT:
+        available = listing.linked_flats.filter(status=FlatStatus.AVAILABLE).exists()
+    else:
+        available = listing.available
+    _apply_availability(listing, available=available, open_seats=None)
+
+
+def bind_listing_to_flat(listing, flat) -> None:
+    """One apartment listing belongs to one flat. Other links are cleared."""
+    from portfolio.models import Flat
+
+    Flat.objects.filter(listing=listing).exclude(pk=flat.pk).update(listing=None)
+    previous_id = flat.listing_id if flat.listing_id and flat.listing_id != listing.id else None
+    flat.listing = listing
+    flat.save(update_fields=['listing', 'updated_at'])
+    sync_flat_listing(flat)
+    if previous_id:
+        previous = Property.objects.filter(pk=previous_id).first()
+        if previous is not None:
+            refresh_listing_availability(previous)
+
+
+def release_booking_occupancy(booking) -> None:
+    """Free the flat when the booking that occupied it ends."""
+    if not booking.flat_id:
+        return
+    from portfolio.models import Flat, FlatStatus, Tenancy, TenancyStatus
+
+    flat = Flat.objects.select_related('building', 'listing').filter(pk=booking.flat_id).first()
+    if flat is None:
+        return
+    tenancy = (
+        Tenancy.objects.filter(
+            flat=flat,
+            status=TenancyStatus.ACTIVE,
+            tenant_id=booking.renter_id,
+        )
+        .order_by('-start_date')
+        .first()
+    )
+    if tenancy is None:
+        return
+    today = timezone.localdate()
+    tenancy.status = TenancyStatus.ENDED
+    tenancy.end_date = today
+    tenancy.save(update_fields=['status', 'end_date', 'updated_at'])
+    flat.status = FlatStatus.AVAILABLE
+    flat.save(update_fields=['status', 'updated_at'])
+    flat.building.refresh_counts()
+    if flat.listing_id:
+        refresh_listing_availability(flat.listing)
 
 
 def attach_listing_to_flat(flat, property_id) -> None:
@@ -119,13 +257,23 @@ def ensure_listing_for_flat(flat, *, publish: bool = True) -> Property:
 
     building = flat.building
     listing = flat.listing
+    generated_name = f'{building.name} Flat {flat.flat_number}'.strip()
+    unit = (flat.flat_number or '').strip()
+    address = (building.address or '').strip()
     if listing is None:
+        match = Q(name__iexact=generated_name)
+        if unit and address:
+            match |= Q(unit_number__iexact=unit, address__iexact=address)
+        if unit:
+            match |= Q(name__iendswith=f'Flat {unit}')
         listing = (
             Property.objects.filter(
                 owner_id=building.owner_id,
                 type=PropertyType.APARTMENT,
-                name__iexact=f'{building.name} Flat {flat.flat_number}'.strip(),
             )
+            .filter(match)
+            .filter(Q(linked_flats__isnull=True) | Q(linked_flats=flat))
+            .distinct()
             .order_by('-published', '-created_at')
             .first()
         )
@@ -147,6 +295,14 @@ def ensure_listing_for_flat(flat, *, publish: bool = True) -> Property:
         if listing.rent != flat.rent:
             listing.rent = flat.rent
             updates.append('rent')
+        if unit and listing.unit_number != unit:
+            listing.unit_number = unit
+            updates.append('unit_number')
+        if address and not (listing.address or '').strip():
+            listing.address = address
+            updates.append('address')
+        if any(getattr(flat, field) is not None for field in BILL_FIELDS):
+            updates.extend(copy_utility_bills(flat, listing))
         if publish and (
             not listing.published or listing.listing_status != ListingStatus.PUBLISHED
         ):
@@ -156,9 +312,9 @@ def ensure_listing_for_flat(flat, *, publish: bool = True) -> Property:
         if updates:
             listing.save(update_fields=list(dict.fromkeys(updates + ['updated_at'])))
         if flat.listing_id != listing.id:
-            flat.listing = listing
-            flat.save(update_fields=['listing', 'updated_at'])
-        sync_flat_listing(flat)
+            bind_listing_to_flat(listing, flat)
+        else:
+            sync_flat_listing(flat)
         return listing
 
     from portfolio.models import FlatStatus
@@ -171,11 +327,16 @@ def ensure_listing_for_flat(flat, *, publish: bool = True) -> Property:
         area=building.city,
         address=building.address,
         city=building.city,
+        unit_number=unit,
         available=flat.status == FlatStatus.AVAILABLE,
         bedrooms=flat.bedrooms,
         bathrooms=flat.bathrooms,
         size_sqft=flat.area,
         floor_level=flat.floor_number,
+        electricity_bill=flat.electricity_bill,
+        gas_bill=flat.gas_bill,
+        internet_bill=flat.internet_bill,
+        water_bill=flat.water_bill,
         tenant_type='any',
         deposit_months=2,
         description=(
@@ -188,9 +349,7 @@ def ensure_listing_for_flat(flat, *, publish: bool = True) -> Property:
         listing_status=ListingStatus.PUBLISHED if publish else ListingStatus.DRAFT,
         last_confirmed_at=timezone.now(),
     )
-    flat.listing = listing
-    flat.save(update_fields=['listing', 'updated_at'])
-    sync_flat_listing(flat)
+    bind_listing_to_flat(listing, flat)
     return listing
 
 
@@ -240,6 +399,10 @@ def ensure_listing_for_mess(mess) -> Property:
         meal_included=True,
         meal_plan=meal_plan,
         meal_cost=mess.meal_monthly_charge,
+        electricity_bill=mess.electricity_bill,
+        gas_bill=mess.gas_bill,
+        internet_bill=mess.internet_bill,
+        water_bill=mess.water_bill,
         image_urls=list(mess.images or []),
         facilities=list(mess.facilities or []),
         description=mess.description

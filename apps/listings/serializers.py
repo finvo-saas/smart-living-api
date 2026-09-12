@@ -21,6 +21,12 @@ def _money(value) -> float:
     return float(value)
 
 
+def _bill(value):
+    if value is None:
+        return None
+    return _money(value)
+
+
 def _plain_text(value: str) -> str:
     return _TAG_RE.sub(' ', value or '').replace('&nbsp;', ' ').strip()
 
@@ -83,6 +89,10 @@ class PropertySerializer(serializers.ModelSerializer):
         required=False,
     )
     serviceCharge = serializers.SerializerMethodField()
+    electricityBill = serializers.SerializerMethodField()
+    gasBill = serializers.SerializerMethodField()
+    internetBill = serializers.SerializerMethodField()
+    waterBill = serializers.SerializerMethodField()
     parkingCount = serializers.IntegerField(
         source='parking_count',
         allow_null=True,
@@ -129,6 +139,7 @@ class PropertySerializer(serializers.ModelSerializer):
     livingConditionScore = serializers.SerializerMethodField()
     safetyScore = serializers.SerializerMethodField()
     messId = serializers.SerializerMethodField()
+    linkedFlatId = serializers.SerializerMethodField()
     utilities = serializers.SerializerMethodField()
     tourImages = serializers.JSONField(source='tour_images', required=False)
     cctv = serializers.BooleanField(allow_null=True, required=False)
@@ -175,6 +186,10 @@ class PropertySerializer(serializers.ModelSerializer):
             'unitNumber',
             'propertyFace',
             'serviceCharge',
+            'electricityBill',
+            'gasBill',
+            'internetBill',
+            'waterBill',
             'parkingCount',
             'availableFrom',
             'rentNegotiable',
@@ -212,6 +227,7 @@ class PropertySerializer(serializers.ModelSerializer):
             'livingConditionScore',
             'safetyScore',
             'messId',
+            'linkedFlatId',
             'utilities',
             'tourImages',
             'cctv',
@@ -270,6 +286,18 @@ class PropertySerializer(serializers.ModelSerializer):
             return None
         return _money(obj.meal_cost)
 
+    def get_electricityBill(self, obj):
+        return _bill(obj.electricity_bill)
+
+    def get_gasBill(self, obj):
+        return _bill(obj.gas_bill)
+
+    def get_internetBill(self, obj):
+        return _bill(obj.internet_bill)
+
+    def get_waterBill(self, obj):
+        return _bill(obj.water_bill)
+
     def get_images(self, obj):
         request = self.context.get('request')
         urls = list(obj.image_urls or [])
@@ -308,6 +336,24 @@ class PropertySerializer(serializers.ModelSerializer):
     def get_messId(self, obj):
         mess = self._linked_mess(obj)
         return str(mess.id) if mess is not None else None
+
+    def get_linkedFlatId(self, obj):
+        if obj.type != PropertyType.APARTMENT:
+            return None
+        flat = obj.linked_flats.order_by('created_at').first()
+        return str(flat.id) if flat is not None else None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.type != PropertyType.APARTMENT:
+            return data
+        from listings.services.inventory import apartment_is_bookable
+
+        bookable = apartment_is_bookable(instance)
+        data['available'] = bookable
+        if not bookable:
+            data['instantBook'] = False
+        return data
 
     def get_utilities(self, obj):
         mess = self._linked_mess(obj)
@@ -401,6 +447,34 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
         allow_null=True,
         required=False,
     )
+    electricityBill = serializers.DecimalField(
+        source='electricity_bill',
+        max_digits=12,
+        decimal_places=2,
+        allow_null=True,
+        required=False,
+    )
+    gasBill = serializers.DecimalField(
+        source='gas_bill',
+        max_digits=12,
+        decimal_places=2,
+        allow_null=True,
+        required=False,
+    )
+    internetBill = serializers.DecimalField(
+        source='internet_bill',
+        max_digits=12,
+        decimal_places=2,
+        allow_null=True,
+        required=False,
+    )
+    waterBill = serializers.DecimalField(
+        source='water_bill',
+        max_digits=12,
+        decimal_places=2,
+        allow_null=True,
+        required=False,
+    )
     parkingCount = serializers.IntegerField(
         source='parking_count',
         allow_null=True,
@@ -485,6 +559,10 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             'unitNumber',
             'propertyFace',
             'serviceCharge',
+            'electricityBill',
+            'gasBill',
+            'internetBill',
+            'waterBill',
             'parkingCount',
             'availableFrom',
             'rentNegotiable',
@@ -499,7 +577,10 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             'depositMonths',
             'published',
             'listingStatus',
+            'flatId',
         )
+
+    flatId = serializers.UUIDField(required=False, allow_null=True, write_only=True)
 
     def validate_name(self, value):
         if not value or not value.strip():
@@ -556,10 +637,64 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
 
         if 'parking_count' in attrs and attrs['parking_count'] is not None:
             attrs['parking'] = attrs['parking_count'] > 0
+
+        self._require_vacant_flat(attrs)
         return attrs
+
+    def _require_vacant_flat(self, attrs):
+        listing_type = attrs.get('type', getattr(self.instance, 'type', None))
+        if listing_type != PropertyType.APARTMENT:
+            return
+        published = attrs.get('published', getattr(self.instance, 'published', False))
+        from portfolio.models import Flat, FlatStatus
+
+        flat_id = attrs.get('flatId')
+        if flat_id is None and published and self.instance is not None:
+            linked = self.instance.linked_flats.order_by('created_at').first()
+            flat_id = linked.id if linked else None
+        if flat_id is None:
+            if published:
+                raise serializers.ValidationError(
+                    {'flatId': 'Choose a vacant flat from My properties before publishing.'},
+                )
+            return
+        owner_id = getattr(self.instance, 'owner_id', None)
+        request = self.context.get('request')
+        if owner_id is None and request is not None:
+            owner_id = request.user.id
+        flat = (
+            Flat.objects.select_related('building')
+            .filter(pk=flat_id, building__owner_id=owner_id)
+            .first()
+        )
+        if flat is None:
+            raise serializers.ValidationError({'flatId': 'That flat is not in your buildings.'})
+        if flat.listing_id and (self.instance is None or flat.listing_id != self.instance.id):
+            raise serializers.ValidationError(
+                {'flatId': 'This flat already has a listing. Edit that listing instead.'},
+            )
+        already_linked = (
+            self.instance is not None and flat.listing_id == self.instance.id
+        )
+        if published and flat.status != FlatStatus.AVAILABLE and not already_linked:
+            raise serializers.ValidationError(
+                {'flatId': 'That flat is not vacant. Vacate it before publishing.'},
+            )
+
+    def _bind_flat(self, prop, flat_id):
+        if not flat_id or prop.type != PropertyType.APARTMENT:
+            return
+        from portfolio.models import Flat
+        from listings.services.inventory import bind_listing_to_flat
+
+        flat = Flat.objects.filter(pk=flat_id, building__owner_id=prop.owner_id).first()
+        if flat is None:
+            return
+        bind_listing_to_flat(prop, flat)
 
     def create(self, validated_data):
         images = validated_data.pop('images', [])
+        flat_id = validated_data.pop('flatId', None)
         validated_data['image_urls'] = images
         validated_data.setdefault('verification_status', 'pending')
         if 'deposit_months' not in validated_data:
@@ -567,51 +702,37 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
                 2 if validated_data.get('type') == PropertyType.APARTMENT else 1
             )
         prop = super().create(validated_data)
-        from listings.services.inventory import link_listing_to_mess
-        from listings.services.poi_enrich import refresh_nearby_facilities
+        from listings.services.inventory import link_listing_to_mess, push_listing_bills_to_flat
+        from listings.services.place_enrich import schedule_place_enrichment
 
         link_listing_to_mess(prop)
-        try:
-            from discovery.services.geocode import ensure_property_coordinates
-
-            ensure_property_coordinates(prop)
-            prop.refresh_from_db()
-        except Exception:
-            pass
-        if prop.latitude is not None and prop.longitude is not None:
-            try:
-                refresh_nearby_facilities(prop)
-            except Exception:
-                pass
+        self._bind_flat(prop, flat_id)
+        push_listing_bills_to_flat(prop)
+        schedule_place_enrichment(prop.pk, geocode=True)
         return prop
 
     def update(self, instance, validated_data):
         images = validated_data.pop('images', None)
+        flat_id = validated_data.pop('flatId', None)
         if images is not None:
             validated_data['image_urls'] = images
         tour = validated_data.pop('tour_images', serializers.empty)
         if tour is not serializers.empty:
             validated_data['tour_images'] = tour
+        previous_place = (instance.address, instance.city, instance.area)
         prop = super().update(instance, validated_data)
-        address_changed = any(
-            k in validated_data for k in ('address', 'city', 'area', 'latitude', 'longitude')
-        )
-        if address_changed and (prop.latitude is None or prop.longitude is None):
-            try:
-                from discovery.services.geocode import ensure_property_coordinates
+        from listings.services.inventory import push_listing_bills_to_flat
+        from listings.services.place_enrich import schedule_place_enrichment
 
-                ensure_property_coordinates(prop)
-                prop.refresh_from_db()
-            except Exception:
-                pass
-        if 'latitude' in validated_data or 'longitude' in validated_data or address_changed:
-            if prop.latitude is not None and prop.longitude is not None:
-                try:
-                    from listings.services.poi_enrich import refresh_nearby_facilities
-
-                    refresh_nearby_facilities(prop)
-                except Exception:
-                    pass
+        self._bind_flat(prop, flat_id)
+        push_listing_bills_to_flat(prop)
+        address_changed = (prop.address, prop.city, prop.area) != previous_place
+        missing_pin = prop.latitude is None or prop.longitude is None
+        if address_changed or missing_pin or not prop.nearby_facilities:
+            schedule_place_enrichment(
+                prop.pk,
+                geocode=address_changed or missing_pin,
+            )
         return prop
 
 

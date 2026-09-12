@@ -18,11 +18,13 @@ def normalize_bd_phone(raw: str) -> str:
 
     digits = PHONE_DIGITS_RE.sub('', str(raw).strip())
 
-    if digits.startswith('880') and len(digits) == 13 and digits[3] == '1':
+    # Standard BD mobile is 01 + 9 digits (+8801XXXXXXXXX).
+    # Also accept 01 + 10 digits so staff numbers like 019134856451 round-trip.
+    if digits.startswith('880') and len(digits) in (13, 14) and digits[3] == '1':
         return f'+{digits}'
-    if digits.startswith('0') and len(digits) == 11 and digits[1] == '1':
+    if digits.startswith('0') and len(digits) in (11, 12) and digits[1] == '1':
         return f'+880{digits[1:]}'
-    if len(digits) == 10 and digits.startswith('1'):
+    if digits.startswith('1') and len(digits) in (10, 11):
         return f'+880{digits}'
 
     raise InvalidError('Enter a valid Bangladesh mobile number (+8801XXXXXXXXX).')
@@ -55,8 +57,8 @@ def phone_lookup_variants(raw: str | None) -> set[str]:
     e164_digits = PHONE_DIGITS_RE.sub('', e164)
     variants.add(e164_digits)
     variants.add(f'+{e164_digits}')
-    if len(e164_digits) >= 10:
-        local = f'0{e164_digits[-10:]}'
-        variants.add(local)
-        variants.add(e164_digits[-10:])
+    if e164_digits.startswith('880') and len(e164_digits) in (13, 14):
+        national = e164_digits[3:]
+        variants.add(national)
+        variants.add(f'0{national}')
     return {v for v in variants if v}

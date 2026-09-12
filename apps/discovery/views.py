@@ -277,6 +277,8 @@ class DiscoverConfirmView(APIView):
 
 
 class DiscoverReportView(APIView):
+    """Visitor report. Listings stay visible until the owner confirms."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -285,8 +287,40 @@ class DiscoverReportView(APIView):
         if not target_id:
             raise InvalidError('id is required.')
         obj = _load_target(target_type, target_id)
+        if isinstance(obj, Property):
+            from listings.services.taken_report import submit_taken_report
+
+            payload = submit_taken_report(obj, request.user)
+            return Response(api_success(payload))
         flag_unavailable(obj)
         return Response(api_success({'reported': True, 'id': str(obj.id)}))
+
+
+class TakenReportListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from listings.services.taken_report import list_pending_for_owner
+
+        return Response(api_success(list_pending_for_owner(request.user)))
+
+
+class TakenReportConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        from listings.services.taken_report import confirm_taken_report
+
+        return Response(api_success(confirm_taken_report(request.user, pk)))
+
+
+class TakenReportDismissView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        from listings.services.taken_report import dismiss_taken_report
+
+        return Response(api_success(dismiss_taken_report(request.user, pk)))
 
 
 class HeartbeatPublicView(APIView):

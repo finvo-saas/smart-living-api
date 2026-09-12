@@ -172,6 +172,34 @@ class Mess(UUIDModel, TimestampedModel):
     # Public meal / guest pricing (seeker-facing)
     meals_per_day = models.PositiveSmallIntegerField(default=3)
     vegetarian_option = models.BooleanField(default=False)
+    electricity_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly house electricity total in BDT. Divided by total seats on the public listing.',
+    )
+    gas_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly house gas total in BDT. Divided by total seats.',
+    )
+    internet_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly house internet total in BDT. Divided by total seats.',
+    )
+    water_bill = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Monthly house water total in BDT. Divided by total seats.',
+    )
     meal_monthly_charge = models.DecimalField(
         max_digits=12,
         decimal_places=2,

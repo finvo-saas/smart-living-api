@@ -543,6 +543,13 @@ class FlatVacateView(APIView):
         from listings.services.inventory import sync_flat_listing
 
         sync_flat_listing(flat)
+        from bookings.models import BookingStatus, PropertyBooking
+
+        PropertyBooking.objects.filter(
+            flat=flat,
+            status=BookingStatus.APPROVED,
+            is_deleted=False,
+        ).update(status=BookingStatus.COMPLETED, completed_at=timezone.now())
         return Response(api_success(_serialize_flat(flat)))
 
 
