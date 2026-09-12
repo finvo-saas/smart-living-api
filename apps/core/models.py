@@ -54,7 +54,10 @@ class MediaAsset(UUIDModel, TimestampedModel):
         db_table = 'core_media_asset'
         ordering = ('-created_at',)
         indexes = [
-            models.Index(fields=['owner', 'kind', '-created_at']),
+            models.Index(
+                fields=['owner', 'kind', '-created_at'],
+                name='core_media__owner_i_8a1c2d_idx',
+            ),
         ]
 
     def __str__(self):

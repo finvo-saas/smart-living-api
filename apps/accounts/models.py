@@ -73,7 +73,7 @@ class User(AbstractBaseUser, UUIDModel, TimestampedModel, PermissionsMixin):
     owner_enabled_verticals = models.JSONField(
         default=list,
         blank=True,
-        help_text='Enabled owner vertical (single): mess, apartment, or hotel.',
+        help_text='Enabled owner verticals: mess, apartment, hotel.',
     )
     owner_focus_selected = models.BooleanField(
         default=False,

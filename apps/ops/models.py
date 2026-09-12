@@ -61,7 +61,10 @@ class Notice(UUIDModel, TimestampedModel):
         db_table = 'ops_notice'
         ordering = ('-date', '-created_at')
         indexes = [
-            models.Index(fields=['scope_type', 'scope_id', 'is_deleted']),
+            models.Index(
+                fields=['scope_type', 'scope_id', 'is_deleted'],
+                name='ops_notice_scope_t_7e2a1c_idx',
+            ),
         ]
 
     def __str__(self):
