@@ -703,12 +703,19 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
             )
         prop = super().create(validated_data)
         from listings.services.inventory import link_listing_to_mess, push_listing_bills_to_flat
-        from listings.services.place_enrich import schedule_place_enrichment
+        from listings.services.place_enrich import (
+            apply_listing_pin,
+            schedule_place_enrichment,
+        )
 
         link_listing_to_mess(prop)
         self._bind_flat(prop, flat_id)
         push_listing_bills_to_flat(prop)
-        schedule_place_enrichment(prop.pk, geocode=True)
+        apply_listing_pin(prop, force=False)
+        schedule_place_enrichment(
+            prop.pk,
+            geocode=prop.latitude is None or prop.longitude is None,
+        )
         return prop
 
     def update(self, instance, validated_data):
@@ -722,17 +729,20 @@ class PropertyWriteSerializer(serializers.ModelSerializer):
         previous_place = (instance.address, instance.city, instance.area)
         prop = super().update(instance, validated_data)
         from listings.services.inventory import push_listing_bills_to_flat
-        from listings.services.place_enrich import schedule_place_enrichment
+        from listings.services.place_enrich import (
+            apply_listing_pin,
+            schedule_place_enrichment,
+        )
 
         self._bind_flat(prop, flat_id)
         push_listing_bills_to_flat(prop)
         address_changed = (prop.address, prop.city, prop.area) != previous_place
         missing_pin = prop.latitude is None or prop.longitude is None
+        if address_changed or missing_pin:
+            apply_listing_pin(prop, force=address_changed)
+        missing_pin = prop.latitude is None or prop.longitude is None
         if address_changed or missing_pin or not prop.nearby_facilities:
-            schedule_place_enrichment(
-                prop.pk,
-                geocode=address_changed or missing_pin,
-            )
+            schedule_place_enrichment(prop.pk, geocode=missing_pin)
         return prop
 
 

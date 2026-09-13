@@ -18,11 +18,16 @@ sys.path.insert(0, str(APPS_DIR))
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-insecure-change-me')
 DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
-ALLOWED_HOSTS = [
+# Public hosts come from env. Internal names are always allowed so Docker
+# healthchecks (127.0.0.1) and Next SSR (http://api:8000) are not rejected.
+# Do not add the server's public IP — scanners hit it and must stay rejected.
+_configured_hosts = [
     host.strip()
     for host in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
     if host.strip()
 ]
+_internal_hosts = ('localhost', '127.0.0.1', 'api')
+ALLOWED_HOSTS = list(dict.fromkeys([*_configured_hosts, *_internal_hosts]))
 
 DJANGO_APPS = [
     'django.contrib.admin',
@@ -403,8 +408,9 @@ REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'core.exceptions.envelope_exception_handler',
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_THROTTLE_RATES': {
-        'anon': os.environ.get('THROTTLE_ANON', '60/hour'),
-        'user': os.environ.get('THROTTLE_USER', '1000/hour'),
+        # A search page fires several API calls. 60/hour made the site look empty.
+        'anon': os.environ.get('THROTTLE_ANON', '180/minute'),
+        'user': os.environ.get('THROTTLE_USER', '600/minute'),
         'otp': os.environ.get('THROTTLE_OTP', '5/hour'),
     },
 }
@@ -545,5 +551,13 @@ LOGGING = {
     'root': {
         'handlers': ['console'],
         'level': 'INFO',
+    },
+    'loggers': {
+        # Scanners hit the raw IP. Do not dump a traceback for every reject.
+        'django.security.DisallowedHost': {
+            'handlers': ['console'],
+            'level': 'CRITICAL',
+            'propagate': False,
+        },
     },
 }

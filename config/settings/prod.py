@@ -91,6 +91,8 @@ if API_THROTTLING_ENABLED:
         'core.throttling.ConfigurableAnonRateThrottle',
         'core.throttling.ConfigurableUserRateThrottle',
     )
+    # Cloudflare, then nginx. Used when CF-Connecting-IP is not forwarded.
+    REST_FRAMEWORK['NUM_PROXIES'] = int(os.environ.get('NUM_PROXIES', '2'))
 
 _secret = os.environ.get('DJANGO_SECRET_KEY', '')
 if not _secret or _secret.startswith('dev-') or _secret == 'change-me-in-production':

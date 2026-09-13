@@ -18,6 +18,7 @@ from core.services.media_library import (
 class HealthCheckView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = []
 
     def get(self, request):
         return Response(

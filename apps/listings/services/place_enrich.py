@@ -14,6 +14,26 @@ from django.db import close_old_connections, transaction
 logger = logging.getLogger(__name__)
 
 
+def apply_listing_pin(prop, *, force: bool) -> bool:
+    """Write lat/lng before the save response returns.
+
+    Nearby-place lookup stays off this path. Overpass can take a minute and
+    that is what made listing create/update time out.
+    """
+    try:
+        from discovery.services.geocode import (
+            ensure_property_coordinates,
+            refresh_property_coordinates,
+        )
+
+        if force:
+            return refresh_property_coordinates(prop)
+        return ensure_property_coordinates(prop)
+    except Exception:
+        logger.exception('Listing geocode failed for %s', getattr(prop, 'pk', None))
+        return False
+
+
 def schedule_place_enrichment(prop_id, *, geocode: bool) -> None:
     def _start() -> None:
         threading.Thread(
