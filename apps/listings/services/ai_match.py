@@ -7,7 +7,10 @@ from typing import Any
 from django.db.models import Q
 
 from listings.models import ListingStatus, Property
-from listings.services.public_catalog import unique_public_listings
+from listings.services.public_catalog import (
+    public_apartment_visibility_q,
+    unique_public_listings,
+)
 
 
 # Bangla and English keyword maps
@@ -299,7 +302,7 @@ def ai_match_properties(query: str, *, limit: int = 20) -> dict[str, Any]:
         flagged_unavailable_at__isnull=True,
         available=True,
     ).filter(
-        ~Q(type='apartment') | Q(linked_flats__status='available')
+        public_apartment_visibility_q()
     ).distinct().select_related('owner').prefetch_related(
         'image_files',
         'linked_messes',

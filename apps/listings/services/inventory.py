@@ -175,13 +175,15 @@ def apartment_is_bookable(listing) -> bool:
     from portfolio.models import FlatStatus
 
     flat = linked_apartment_flat(listing)
-    return flat is not None and flat.status == FlatStatus.AVAILABLE
+    if flat is None:
+        return bool(listing.available)
+    return flat.status == FlatStatus.AVAILABLE
 
 
 def refresh_listing_availability(listing) -> None:
     from portfolio.models import FlatStatus
 
-    if listing.type == PropertyType.APARTMENT:
+    if listing.type == PropertyType.APARTMENT and listing.linked_flats.exists():
         available = listing.linked_flats.filter(status=FlatStatus.AVAILABLE).exists()
     else:
         available = listing.available

@@ -66,13 +66,15 @@ def notify_channels(
     body: str,
     url: str = '/',
     email_subject: str | None = None,
+    ntype: str = '',
+    tag: str = 'smart-living',
 ) -> dict:
     """Fan-out: in-app/push via messaging, optional email, optional SMS."""
     result = {'push': False, 'email': False, 'sms': False}
     try:
         from messaging.services.push import notify_user
 
-        notify_user(user, title=title, body=body, url=url)
+        notify_user(user, title=title, body=body, url=url, ntype=ntype, tag=tag)
         result['push'] = True
     except Exception:
         logger.exception('notify_user failed')

@@ -24,6 +24,48 @@ def _agreement_qs():
     return RentalAgreement.objects.filter(is_deleted=False).select_related('user')
 
 
+def _notify_agreement_tenant(agreement, actor) -> None:
+    from django.db import transaction
+
+    from accounts.services.email import notify_channels
+    from messaging.models import NotificationType
+
+    if not agreement.flat_id:
+        return
+    tenancy = (
+        Tenancy.objects.filter(
+            flat_id=agreement.flat_id,
+            status=TenancyStatus.ACTIVE,
+            tenant__isnull=False,
+        )
+        .select_related('tenant')
+        .first()
+    )
+    if tenancy is None or tenancy.tenant_id == actor.id:
+        return
+    place = agreement.property_name or 'your flat'
+    if agreement.flat_number:
+        place = f'{place} · Flat {agreement.flat_number}'
+    tenant = tenancy.tenant
+
+    def _send():
+        try:
+            notify_channels(
+                tenant,
+                title='Rental agreement uploaded',
+                body=f'An agreement for {place} is ready in Documents.',
+                url='/documents',
+                ntype=NotificationType.SYSTEM,
+                tag=f'agreement-{agreement.id}',
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception('Agreement notice failed')
+
+    transaction.on_commit(_send)
+
+
 def _get_agreement(pk):
     try:
         return _agreement_qs().get(pk=pk)
@@ -84,6 +126,7 @@ class AgreementListCreateView(APIView):
         ser = RentalAgreementWriteSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         agreement = ser.create_agreement(request.user)
+        _notify_agreement_tenant(agreement, request.user)
         return Response(
             api_success(RentalAgreementSerializer(agreement).data),
             status=status.HTTP_201_CREATED,

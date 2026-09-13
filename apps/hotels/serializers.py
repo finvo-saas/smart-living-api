@@ -288,6 +288,7 @@ class RoomPricingSerializer(serializers.Serializer):
 class HotelBookingSerializer(serializers.ModelSerializer):
     hotelId = serializers.UUIDField(source='hotel_id', read_only=True)
     roomId = serializers.UUIDField(source='room_id', read_only=True)
+    roomNumber = serializers.CharField(source='room.room_number', read_only=True)
     userId = serializers.UUIDField(source='user_id', read_only=True)
     guestName = serializers.CharField(source='guest_name', read_only=True)
     guestPhone = serializers.CharField(source='guest_phone', read_only=True)
@@ -314,6 +315,7 @@ class HotelBookingSerializer(serializers.ModelSerializer):
             'id',
             'hotelId',
             'roomId',
+            'roomNumber',
             'userId',
             'guestName',
             'guestPhone',

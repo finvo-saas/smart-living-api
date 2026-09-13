@@ -27,6 +27,17 @@ def dispatch_due_reminders() -> dict:
         try:
             if 'sms' in channels and reminder.user.phone:
                 send_sms(reminder.user.phone, reminder.message)
+            from accounts.services.email import notify_channels
+            from messaging.models import NotificationType
+
+            notify_channels(
+                reminder.user,
+                title=reminder.title or 'Reminder',
+                body=reminder.message,
+                url='/reminders',
+                ntype=NotificationType.SYSTEM,
+                tag=f'reminder-{reminder.id}',
+            )
             reminder.status = ReminderStatus.SENT
             reminder.sent_date = now
             reminder.save(update_fields=['status', 'sent_date', 'updated_at'])

@@ -36,6 +36,38 @@ def _get_chat(pk, user=None):
     return chat
 
 
+def _notify_chat(sender, receiver, content: str, chat_id) -> None:
+    from django.db import transaction
+
+    from accounts.services.email import notify_channels
+    from messaging.models import NotificationType
+
+    text = ' '.join((content or '').split())
+    if len(text) > 140:
+        text = text[:139].rstrip() + '…'
+    if not text:
+        text = 'Sent you a message.'
+    who = sender.name or 'Someone'
+    title = f'Message from {who}'
+
+    def _send():
+        try:
+            notify_channels(
+                receiver,
+                title=title[:255],
+                body=text,
+                url='/messages',
+                ntype=NotificationType.SYSTEM,
+                tag=f'chat-{chat_id}',
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception('Chat notice failed')
+
+    transaction.on_commit(_send)
+
+
 def _user_chats(user):
     return _chat_qs().filter(
         Q(participant1=user) | Q(participant2=user),
@@ -115,6 +147,7 @@ class ChatListCreateView(APIView):
             else:
                 chat.unread_count_p2 += 1
             chat.save()
+            _notify_chat(request.user, receiver, initial, chat.id)
 
         return Response(
             api_success(ChatSerializer(chat, context={'request': request}).data),
@@ -189,6 +222,7 @@ class ChatMessageListCreateView(APIView):
         else:
             chat.unread_count_p2 += 1
         chat.save()
+        _notify_chat(request.user, receiver, data['content'], chat.id)
 
         return Response(
             api_success(ChatMessageSerializer(msg).data),

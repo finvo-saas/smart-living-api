@@ -11,7 +11,10 @@ from core.exceptions import ForbiddenError, InvalidError, NotFoundError
 from core.services.media import media_storage
 from listings.filters import PropertyFilter
 from listings.models import ListingStatus, Property, PropertyImage, PropertyReview
-from listings.services.public_catalog import unique_public_listings
+from listings.services.public_catalog import (
+    public_apartment_visibility_q,
+    unique_public_listings,
+)
 from listings.serializers import (
     BatchIdsSerializer,
     OwnerResponseSerializer,
@@ -36,18 +39,13 @@ def _nid_prefetch():
 
 
 def _published_qs():
-    from portfolio.models import FlatStatus
-
     return (
         Property.objects.filter(
             published=True,
             listing_status=ListingStatus.PUBLISHED,
             flagged_unavailable_at__isnull=True,
         )
-        .filter(
-            ~Q(type='apartment')
-            | Q(linked_flats__status=FlatStatus.AVAILABLE)
-        )
+        .filter(public_apartment_visibility_q())
         .distinct()
         .select_related('owner')
         .prefetch_related(

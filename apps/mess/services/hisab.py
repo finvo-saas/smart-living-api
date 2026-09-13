@@ -545,6 +545,9 @@ def close_month(mess, year: int, month: int, user) -> dict:
             due=_d(row['due']),
             credit=_d(row['credit']),
         )
+    from mess.notify import schedule_hisab_closed
+
+    schedule_hisab_closed(mess.id, year, month)
     return preview_month(mess, year, month)
 
 

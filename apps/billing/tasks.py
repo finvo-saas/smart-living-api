@@ -10,13 +10,17 @@ from billing.models import Bill, BillStatus
 def mark_overdue_bills() -> dict:
     """Flip unpaid bills past due_date to overdue."""
     today = timezone.localdate()
-    updated = (
-        Bill.objects.filter(
-            is_deleted=False,
-            status=BillStatus.UNPAID,
-            due_date__lt=today,
-        ).update(status=BillStatus.OVERDUE)
+    due = Bill.objects.filter(
+        is_deleted=False,
+        status=BillStatus.UNPAID,
+        due_date__lt=today,
     )
+    bill_ids = list(due.values_list('id', flat=True))
+    updated = due.update(status=BillStatus.OVERDUE)
+    if bill_ids:
+        from billing.notify import notify_bills_overdue
+
+        notify_bills_overdue(bill_ids)
     return {'updated': updated, 'asOf': today.isoformat()}
 
 

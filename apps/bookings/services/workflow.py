@@ -115,6 +115,12 @@ def create_booking(user, data: dict) -> PropertyBooking:
     if status == BookingStatus.APPROVED and linked_flat is not None:
         _assign_flat_to_booking(booking, linked_flat.id, actor=owner)
 
+    from bookings.services.notify import schedule_booking_notice
+
+    schedule_booking_notice(
+        booking.id,
+        'instant' if status == BookingStatus.APPROVED else 'requested',
+    )
     return booking
 
 
@@ -219,6 +225,9 @@ def patch_status(
         if booking.flat_id:
             update_fields.append('flat')
         booking.save(update_fields=update_fields)
+        from bookings.services.notify import schedule_booking_notice
+
+        schedule_booking_notice(booking.id, 'accepted')
         return booking
 
     if status == BookingStatus.REJECTED:
@@ -234,6 +243,9 @@ def patch_status(
         booking.save(
             update_fields=['status', 'rejected_at', 'rejection_reason', 'updated_at'],
         )
+        from bookings.services.notify import schedule_booking_notice
+
+        schedule_booking_notice(booking.id, 'rejected', reason)
         return booking
 
     if status == BookingStatus.CANCELLED:

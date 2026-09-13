@@ -270,7 +270,9 @@ class HotelBookingsView(APIView):
         qs = HotelBooking.objects.filter(
             hotel=hotel,
             is_deleted=False,
-        ).exclude(status=HotelBookingStatus.CANCELLED).order_by('-created_at')
+        ).select_related('room').exclude(
+            status=HotelBookingStatus.CANCELLED,
+        ).order_by('-created_at')
         data = _serialize_bookings(qs, request)
 
         # Public calendar needs dates only; owners/admins get full guest details
@@ -369,6 +371,10 @@ class HotelBookingsView(APIView):
             fee_breakdown=fees,
         )
         hotel.refresh_room_counts()
+        from hotels.notify import schedule_hotel_booking
+
+        event = 'confirmed' if booking_status == HotelBookingStatus.CONFIRMED else 'requested'
+        schedule_hotel_booking(booking.id, event)
         return Response(
             api_success(_serialize_booking(booking, request)),
             status=status.HTTP_201_CREATED,
@@ -382,8 +388,68 @@ class MyHotelBookingsView(APIView):
         qs = HotelBooking.objects.filter(
             user=request.user,
             is_deleted=False,
-        ).order_by('-created_at')
+        ).select_related('room').order_by('-created_at')
         return Response(api_success(_serialize_bookings(qs, request)))
+
+
+class HotelBookingStatusView(APIView):
+    """Owner confirms, checks in, checks out, or cancels a stay."""
+
+    permission_classes = [IsAuthenticated]
+
+    _NEXT = {
+        HotelBookingStatus.PENDING: {
+            HotelBookingStatus.CONFIRMED,
+            HotelBookingStatus.CANCELLED,
+        },
+        HotelBookingStatus.CONFIRMED: {
+            HotelBookingStatus.CHECKED_IN,
+            HotelBookingStatus.CANCELLED,
+        },
+        HotelBookingStatus.CHECKED_IN: {HotelBookingStatus.CHECKED_OUT},
+    }
+
+    def patch(self, request, booking_id):
+        new_status = (request.data.get('status') or '').strip()
+        if new_status not in HotelBookingStatus.values:
+            raise InvalidError('Unknown booking status.')
+        try:
+            booking = HotelBooking.objects.select_related('hotel', 'room', 'user').get(
+                pk=booking_id,
+                is_deleted=False,
+            )
+        except HotelBooking.DoesNotExist as exc:
+            raise NotFoundError('Booking not found.') from exc
+
+        _assert_hotel_owner(booking.hotel, request.user)
+        allowed = self._NEXT.get(booking.status, set())
+        if new_status not in allowed:
+            raise InvalidError('That status change is not allowed.')
+
+        if new_status == HotelBookingStatus.CANCELLED:
+            refund = calculate_cancellation_refund(booking)
+            booking.cancelled_at = timezone.now()
+            booking.cancellation_refund_amount = refund['refundAmount']
+            booking.cancellation_note = (request.data.get('reason') or '').strip()
+            if refund['refundAmount'] > 0:
+                booking.payment_status = (
+                    PaymentStatus.REFUNDED
+                    if refund['refundPercent'] == 100
+                    else PaymentStatus.PARTIAL
+                )
+
+        booking.status = new_status
+        booking.save()
+        booking.hotel.refresh_room_counts()
+        from hotels.notify import schedule_hotel_booking
+
+        schedule_hotel_booking(
+            booking.id,
+            new_status,
+            booking.cancellation_note or '',
+            actor_id=request.user.id,
+        )
+        return Response(api_success(_serialize_booking(booking, request)))
 
 
 class HotelBookingCancelView(APIView):
@@ -422,6 +488,9 @@ class HotelBookingCancelView(APIView):
             )
         booking.save()
         booking.hotel.refresh_room_counts()
+        from hotels.notify import schedule_hotel_booking
+
+        schedule_hotel_booking(booking.id, 'cancelled', reason, actor_id=user.id)
         payload = _serialize_booking(booking, request)
         payload['cancellation'] = refund
         return Response(api_success(payload))

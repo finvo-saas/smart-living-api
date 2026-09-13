@@ -5,11 +5,29 @@ published from the same flat, must not both appear in search.
 """
 from __future__ import annotations
 
+from django.db.models import Exists, OuterRef, Q
+
 from listings.models import Property, PropertyType
 
 
 def _norm(value) -> str:
     return ' '.join((value or '').strip().lower().split())
+
+
+def public_apartment_visibility_q() -> Q:
+    """Apartments appear when they are a standalone listing or have a vacant flat.
+
+    A listing tied only to occupied or maintenance flats stays off search.
+    """
+    from portfolio.models import Flat, FlatStatus
+
+    linked = Flat.objects.filter(listing_id=OuterRef('pk'))
+    vacant = linked.filter(status=FlatStatus.AVAILABLE)
+    return (
+        ~Q(type=PropertyType.APARTMENT)
+        | ~Exists(linked)
+        | Exists(vacant)
+    )
 
 
 def unique_public_listings(listings) -> list[Property]:

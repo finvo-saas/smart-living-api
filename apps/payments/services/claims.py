@@ -99,7 +99,7 @@ def create_bill_claim(user, data: dict) -> PaymentClaim:
     if pending:
         raise InvalidError('You already have a pending claim for this bill.')
 
-    return PaymentClaim.objects.create(
+    claim = PaymentClaim.objects.create(
         bill=bill,
         claimed_by=user,
         amount=amount,
@@ -108,6 +108,10 @@ def create_bill_claim(user, data: dict) -> PaymentClaim:
         note=note,
         status=PaymentClaimStatus.PENDING,
     )
+    from billing.notify import schedule_payment_claim
+
+    schedule_payment_claim(claim.id)
+    return claim
 
 
 @transaction.atomic
@@ -181,6 +185,9 @@ def create_mess_claim(user, data: dict) -> PaymentClaim:
     )
     claim.member_deposit = deposit
     claim.save(update_fields=['member_deposit', 'updated_at'])
+    from billing.notify import schedule_payment_claim
+
+    schedule_payment_claim(claim.id)
     return claim
 
 
@@ -249,6 +256,9 @@ def review_claim(owner, claim_id, *, approve: bool, reason: str = '') -> Payment
             pending_txn.save(
                 update_fields=['status', 'failure_reason', 'updated_at'],
             )
+        from billing.notify import schedule_payment_claim
+
+        schedule_payment_claim(claim.id, rejected=True, reason=claim.rejection_reason)
         return claim
 
     claim.status = PaymentClaimStatus.CONFIRMED
@@ -298,4 +308,8 @@ def review_claim(owner, claim_id, *, approve: bool, reason: str = '') -> Payment
             ]
         )
 
+    if claim.mess_id and not claim.bill_id:
+        from billing.notify import schedule_claim_confirmed
+
+        schedule_claim_confirmed(claim.id)
     return claim

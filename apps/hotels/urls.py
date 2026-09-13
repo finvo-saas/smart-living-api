@@ -2,6 +2,7 @@ from django.urls import path
 
 from hotels.views import (
     HotelBookingCancelView,
+    HotelBookingStatusView,
     HotelBookingsView,
     HotelDetailView,
     HotelListCreateView,
@@ -23,6 +24,11 @@ urlpatterns = [
         'hotels/bookings/<uuid:booking_id>/cancel/',
         HotelBookingCancelView.as_view(),
         name='hotel-booking-cancel',
+    ),
+    path(
+        'hotels/bookings/<uuid:booking_id>/status/',
+        HotelBookingStatusView.as_view(),
+        name='hotel-booking-status',
     ),
     path('hotels/<uuid:pk>/', HotelDetailView.as_view(), name='hotel-detail'),
     path(

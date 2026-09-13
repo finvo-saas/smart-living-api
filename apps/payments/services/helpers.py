@@ -172,6 +172,13 @@ def complete_transaction(
     except Exception:
         pass
 
+    try:
+        from billing.notify import schedule_payment_received
+
+        schedule_payment_received(txn.id)
+    except Exception:
+        pass
+
     if create_payout is None:
         create_payout = should_create_payout(bill.owner) if bill else False
 

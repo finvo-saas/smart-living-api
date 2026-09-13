@@ -116,6 +116,9 @@ class ComplaintListCreateView(APIView):
         ser = ComplaintCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         complaint = ser.create_complaint(request.user)
+        from support.notify import schedule_complaint_created
+
+        schedule_complaint_created(complaint.id)
         complaint = _get_complaint(complaint.id)
         return Response(
             api_success(ComplaintSerializer(complaint).data),
@@ -152,16 +155,19 @@ class ComplaintStatusUpdateView(APIView):
             if 'category' in data and data['category']:
                 complaint.category = data['category']
 
+        status_changed = False
         if 'status' in data:
             new_status = data['status']
             if not is_staff and new_status != ComplaintStatus.OPEN:
                 raise ForbiddenError('Only owners or admins can change complaint status.')
+            status_changed = complaint.status != new_status
             complaint.status = new_status
             if new_status == ComplaintStatus.RESOLVED:
                 complaint.resolved_at = timezone.now()
             elif new_status != ComplaintStatus.RESOLVED:
                 complaint.resolved_at = None
 
+        replied = False
         if data.get('response'):
             if not is_staff and not is_creator:
                 raise ForbiddenError('You cannot reply on this complaint.')
@@ -173,8 +179,15 @@ class ComplaintStatusUpdateView(APIView):
                 body=reply,
                 is_staff_reply=is_staff,
             )
+            replied = True
 
         complaint.save()
+        from support.notify import schedule_complaint_reply, schedule_complaint_status
+
+        if replied:
+            schedule_complaint_reply(complaint.id, user.id, complaint.response)
+        elif status_changed:
+            schedule_complaint_status(complaint.id, user.id, complaint.status)
 
         complaint = _get_complaint(complaint.id)
         return Response(api_success(ComplaintSerializer(complaint).data))
@@ -221,6 +234,10 @@ class ComplaintMessageListCreateView(APIView):
             if complaint.status == ComplaintStatus.OPEN:
                 complaint.status = ComplaintStatus.IN_PROGRESS
             complaint.save(update_fields=['response', 'status', 'updated_at'])
+
+        from support.notify import schedule_complaint_reply
+
+        schedule_complaint_reply(complaint.id, request.user.id, msg.body)
 
         return Response(
             api_success(ComplaintMessageSerializer(msg).data),

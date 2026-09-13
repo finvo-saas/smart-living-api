@@ -170,6 +170,9 @@ class ScopeNoticeListCreateView(APIView):
             image_urls=data.get('imageUrls', []),
             created_by=request.user,
         )
+        from ops.notice_notify import schedule_notice_published
+
+        schedule_notice_published(notice)
         return Response(
             api_success(NoticeSerializer(notice).data),
             status=status.HTTP_201_CREATED,

@@ -620,6 +620,13 @@ class DailyMenuListCreateView(APIView):
                 'created_by': request.user,
             },
         )
+        if created:
+            from mess.notify import schedule_menu_published
+
+            schedule_menu_published(
+                mess.id,
+                f'{mess.name} posted the menu for {menu.date.isoformat()}.',
+            )
         code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(api_success(DailyMenuSerializer(menu).data), status=code)
 
@@ -666,6 +673,12 @@ class WeeklyScheduleListCreateView(APIView):
             schedule=data['schedule'],
             is_active=data.get('isActive', True),
             created_by=request.user,
+        )
+        from mess.notify import schedule_menu_published
+
+        schedule_menu_published(
+            mess.id,
+            f'{mess.name} posted the menu for the week of {schedule.week_start_date.isoformat()}.',
         )
         return Response(
             api_success(WeeklyScheduleSerializer(schedule).data),
@@ -1320,6 +1333,9 @@ class RuleViolationListCreateView(APIView):
             reported_at=timezone.now(),
             evidence=data.get('evidence', []),
         )
+        from mess.notify import schedule_rule_violation
+
+        schedule_rule_violation(violation.id)
         return Response(
             api_success(RuleViolationSerializer(violation).data),
             status=status.HTTP_201_CREATED,

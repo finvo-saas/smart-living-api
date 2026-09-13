@@ -205,6 +205,9 @@ def create_bill_from_payload(owner, data: dict) -> Bill:
             consumption=item.get('consumption'),
         )
 
+    from billing.notify import schedule_bill_issued
+
+    schedule_bill_issued(bill.id)
     return bill
 
 
@@ -312,6 +315,9 @@ def generate_bill_for_flat(
             consumption=item.get('consumption'),
         )
 
+    from billing.notify import schedule_bill_issued
+
+    schedule_bill_issued(bill.id)
     return bill
 
 
@@ -413,6 +419,9 @@ def generate_bill_for_mess_member(
             consumption=item.get('consumption'),
         )
 
+    from billing.notify import schedule_bill_issued
+
+    schedule_bill_issued(bill.id)
     return bill
 
 
