@@ -56,7 +56,7 @@ def _notify_chat(sender, receiver, content: str, chat_id) -> None:
                 receiver,
                 title=title[:255],
                 body=text,
-                url='/messages',
+                url=f'/messages?chatId={chat_id}',
                 ntype=NotificationType.SYSTEM,
                 tag=f'chat-{chat_id}',
             )
@@ -96,15 +96,35 @@ class ChatListCreateView(APIView):
         ser = ChatCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
-        p2_id = data['participant2Id']
+        from listings.models import Property
+        from messaging.services.contacts import can_message
 
-        if p2_id == request.user.id:
+        p2_id = data.get('participant2Id')
+        property_id = data.get('propertyId')
+        prop = None
+        if property_id:
+            prop = Property.objects.select_related('owner').filter(pk=property_id).first()
+            if prop is None:
+                raise NotFoundError('Listing not found.')
+            if not data.get('propertyName'):
+                data['propertyName'] = prop.name
+
+        if p2_id is None and prop is not None:
+            if prop.owner_id == request.user.id:
+                raise InvalidError('Choose a renter to message.')
+            p2 = prop.owner
+        elif p2_id is None:
+            raise InvalidError('Choose who to message.')
+        elif p2_id == request.user.id:
             raise InvalidError('Cannot create a chat with yourself.')
+        else:
+            try:
+                p2 = User.objects.get(pk=p2_id, is_active=True)
+            except User.DoesNotExist as exc:
+                raise NotFoundError('Participant not found.') from exc
 
-        try:
-            p2 = User.objects.get(pk=p2_id, is_active=True)
-        except User.DoesNotExist as exc:
-            raise NotFoundError('Participant not found.') from exc
+        if not can_message(request.user, p2, property_id=property_id):
+            raise ForbiddenError('You can only message an owner or a renter on SmartBasa.')
 
         p1, p2_ordered = sorted(
             [request.user, p2],
@@ -128,6 +148,10 @@ class ChatListCreateView(APIView):
                 property_id=data.get('propertyId'),
                 property_name=data.get('propertyName', ''),
             )
+        elif data.get('propertyId') and not chat.property_id:
+            chat.property_id = data.get('propertyId')
+            chat.property_name = data.get('propertyName') or chat.property_name
+            chat.save(update_fields=['property_id', 'property_name', 'updated_at'])
 
         initial = data.get('initialMessage', '').strip()
         if initial:
@@ -170,11 +194,11 @@ class ChatMessageListCreateView(APIView):
         chat = _get_chat(pk, request.user)
         messages = chat.messages.select_related('sender', 'receiver').order_by('created_at')
 
-        to_deliver = messages.filter(
+        now = timezone.now()
+        messages.filter(
             receiver=request.user,
-            status=MessageStatus.SENT,
-        )
-        to_deliver.update(status=MessageStatus.DELIVERED)
+            status__in=[MessageStatus.SENT, MessageStatus.DELIVERED],
+        ).update(status=MessageStatus.READ, read_at=now)
 
         if chat.participant1_id == request.user.id:
             chat.unread_count_p1 = 0
@@ -234,11 +258,33 @@ class ChatUnreadCountView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        count = ChatMessage.objects.filter(
-            receiver=request.user,
-            status__in=[MessageStatus.SENT, MessageStatus.DELIVERED],
-        ).count()
-        return Response(api_success({'count': count}))
+        from django.db.models import Case, IntegerField, Sum, When
+
+        total = (
+            _user_chats(request.user)
+            .aggregate(
+                count=Sum(
+                    Case(
+                        When(participant1=request.user, then='unread_count_p1'),
+                        When(participant2=request.user, then='unread_count_p2'),
+                        default=0,
+                        output_field=IntegerField(),
+                    ),
+                ),
+            )
+            .get('count')
+            or 0
+        )
+        return Response(api_success({'count': total}))
+
+
+class ChatContactListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from messaging.services.contacts import chat_contacts
+
+        return Response(api_success(chat_contacts(request.user)))
 
 
 class ChatUserView(APIView):

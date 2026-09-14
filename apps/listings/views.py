@@ -122,7 +122,7 @@ class PropertyDetailView(APIView):
         try:
             prop = (
                 Property.objects.select_related('owner')
-                .prefetch_related('image_files')
+                .prefetch_related('image_files', 'linked_flats__building')
                 .get(pk=pk)
             )
         except Property.DoesNotExist as exc:
@@ -299,7 +299,7 @@ class OwnerListingsView(APIView):
         qs = (
             Property.objects.filter(owner=request.user)
             .select_related('owner')
-            .prefetch_related('image_files')
+            .prefetch_related('image_files', 'linked_flats__building')
             .order_by('-updated_at')
         )
         return Response(api_success(_serialize_many(qs, request)))

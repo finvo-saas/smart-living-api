@@ -26,8 +26,9 @@ from portfolio.serializers import (
     RenterSerializer,
     VacateFlatSerializer,
 )
+from portfolio.services.layout import sync_building_layout
 from portfolio.services.renter_history import get_renter_history
-from subscriptions.services import assert_can_add_flat, get_flat_limit_status
+from subscriptions.services import assert_can_add_flat
 from mess.models import Mess
 from mess.serializers import MessSerializer
 
@@ -143,14 +144,21 @@ class BuildingListCreateView(APIView):
         _require_owner(request.user)
         serializer = BuildingWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        planned_flats = serializer.validated_data.get('total_flats', 0)
-        if planned_flats:
-            status_data = get_flat_limit_status(request.user)
-            if status_data['max'] >= 0 and planned_flats > status_data['max']:
-                raise InvalidError(
-                    f'Plan allows up to {status_data["max"]} flats.',
-                )
+        layouts = serializer.validated_data.pop('floorLayouts', None)
         building = serializer.save(owner=request.user)
+        if layouts:
+            building = sync_building_layout(
+                building,
+                [
+                    {
+                        'floor_number': item['floorNumber'],
+                        'flat_count': item['flatCount'],
+                    }
+                    for item in layouts
+                ],
+            )
+        else:
+            building.refresh_counts()
         return Response(
             api_success(_serialize_building(building)),
             status=status.HTTP_201_CREATED,
@@ -176,8 +184,21 @@ class BuildingDetailView(APIView):
         building = _owner_building(request.user, pk)
         serializer = BuildingPatchSerializer(building, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        layouts = serializer.validated_data.pop('floorLayouts', None)
         building = serializer.save()
-        building.refresh_counts()
+        if layouts:
+            building = sync_building_layout(
+                building,
+                [
+                    {
+                        'floor_number': item['floorNumber'],
+                        'flat_count': item['flatCount'],
+                    }
+                    for item in layouts
+                ],
+            )
+        else:
+            building.refresh_counts()
         return Response(api_success(_serialize_building(building)))
 
 

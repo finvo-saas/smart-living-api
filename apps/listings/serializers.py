@@ -337,10 +337,16 @@ class PropertySerializer(serializers.ModelSerializer):
         mess = self._linked_mess(obj)
         return str(mess.id) if mess is not None else None
 
-    def get_linkedFlatId(self, obj):
+    def _apartment_flat(self, obj):
         if obj.type != PropertyType.APARTMENT:
             return None
-        flat = obj.linked_flats.order_by('created_at').first()
+        flats = list(obj.linked_flats.all())
+        if not flats:
+            return None
+        return min(flats, key=lambda flat: flat.created_at)
+
+    def get_linkedFlatId(self, obj):
+        flat = self._apartment_flat(obj)
         return str(flat.id) if flat is not None else None
 
     def to_representation(self, instance):
@@ -353,6 +359,21 @@ class PropertySerializer(serializers.ModelSerializer):
         data['available'] = bookable
         if not bookable:
             data['instantBook'] = False
+        flat = self._apartment_flat(instance)
+        if flat is None:
+            data['occupancy'] = 'unlinked'
+            data['unitLabel'] = None
+            data['flatStatus'] = None
+            return data
+        data['occupancy'] = 'vacant' if flat.status == 'available' else 'occupied'
+        building = getattr(flat, 'building', None)
+        building_name = getattr(building, 'name', '') or ''
+        data['unitLabel'] = (
+            f'{building_name} · Flat {flat.flat_number}'.strip(' ·')
+            if building_name
+            else f'Flat {flat.flat_number}'
+        )
+        data['flatStatus'] = flat.status
         return data
 
     def get_utilities(self, obj):

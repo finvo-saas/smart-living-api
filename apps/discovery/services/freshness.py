@@ -17,7 +17,15 @@ def confirm_object(obj) -> None:
     obj.flagged_unavailable_at = None
     fields = ['last_confirmed_at', 'flagged_unavailable_at', 'updated_at']
     if hasattr(obj, 'available'):
-        obj.available = True
+        available = True
+        if getattr(obj, 'type', None) == 'apartment':
+            from listings.services.inventory import linked_apartment_flat
+            from portfolio.models import FlatStatus
+
+            flat = linked_apartment_flat(obj)
+            if flat is not None and flat.status != FlatStatus.AVAILABLE:
+                available = False
+        obj.available = available
         fields.append('available')
     obj.save(update_fields=fields)
 

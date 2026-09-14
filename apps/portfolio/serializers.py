@@ -251,6 +251,15 @@ class FlatPatchSerializer(serializers.ModelSerializer):
         return flat
 
 
+def _validate_floor_layouts(value):
+    numbers = [item['floorNumber'] for item in value]
+    if len(numbers) != len(set(numbers)):
+        raise serializers.ValidationError('Each floor number can only be set once.')
+    if value and sum(item['flatCount'] for item in value) < 1:
+        raise serializers.ValidationError('Add at least one flat.')
+    return value
+
+
 class BuildingSerializer(serializers.ModelSerializer):
     ownerId = serializers.UUIDField(source='owner_id', read_only=True)
     totalFloors = serializers.IntegerField(source='total_floors')
@@ -279,27 +288,40 @@ class BuildingSerializer(serializers.ModelSerializer):
         return _date_str(obj.created_at)
 
 
+class FloorLayoutSerializer(serializers.Serializer):
+    floorNumber = serializers.IntegerField(min_value=0, max_value=200)
+    flatCount = serializers.IntegerField(min_value=0, max_value=50)
+
+
 class BuildingWriteSerializer(serializers.ModelSerializer):
     totalFloors = serializers.IntegerField(source='total_floors', required=False, default=1)
     totalFlats = serializers.IntegerField(source='total_flats', required=False, default=0)
+    floorLayouts = FloorLayoutSerializer(many=True, required=False)
 
     class Meta:
         model = Building
-        fields = ('name', 'address', 'city', 'totalFloors', 'totalFlats')
+        fields = ('name', 'address', 'city', 'totalFloors', 'totalFlats', 'floorLayouts')
 
     def validate_name(self, value):
         if not value or not value.strip():
             raise serializers.ValidationError('Building name is required.')
         return value.strip()
 
+    def validate_floorLayouts(self, value):
+        return _validate_floor_layouts(value)
+
 
 class BuildingPatchSerializer(serializers.ModelSerializer):
     totalFloors = serializers.IntegerField(source='total_floors', required=False)
     totalFlats = serializers.IntegerField(source='total_flats', required=False)
+    floorLayouts = FloorLayoutSerializer(many=True, required=False)
 
     class Meta:
         model = Building
-        fields = ('name', 'address', 'city', 'totalFloors', 'totalFlats')
+        fields = ('name', 'address', 'city', 'totalFloors', 'totalFlats', 'floorLayouts')
+
+    def validate_floorLayouts(self, value):
+        return _validate_floor_layouts(value)
 
 
 class FloorSerializer(serializers.ModelSerializer):

@@ -2,6 +2,7 @@ from django.urls import path
 
 from core.views_sse import ChatMessagesSSEView
 from messaging.views import (
+    ChatContactListView,
     ChatDetailView,
     ChatListCreateView,
     ChatMessageListCreateView,
@@ -18,6 +19,7 @@ from messaging.views import (
 urlpatterns = [
     path('chats/', ChatListCreateView.as_view(), name='chat-list'),
     path('chats/unread-count/', ChatUnreadCountView.as_view(), name='chat-unread-count'),
+    path('chats/contacts/', ChatContactListView.as_view(), name='chat-contacts'),
     path('chats/users/<uuid:user_id>/', ChatUserView.as_view(), name='chat-user'),
     path('chats/<uuid:pk>/', ChatDetailView.as_view(), name='chat-detail'),
     path(

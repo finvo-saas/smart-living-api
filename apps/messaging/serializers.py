@@ -96,7 +96,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 
 
 class ChatCreateSerializer(serializers.Serializer):
-    participant2Id = serializers.UUIDField()
+    participant2Id = serializers.UUIDField(required=False, allow_null=True)
     propertyId = serializers.UUIDField(required=False, allow_null=True)
     propertyName = serializers.CharField(required=False, allow_blank=True, default='')
     initialMessage = serializers.CharField(required=False, allow_blank=True, default='')
